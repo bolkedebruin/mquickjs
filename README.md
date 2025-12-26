@@ -37,7 +37,7 @@ usage: mqjs [options] [file [args]]
 
 Compile and run a program using 10 kB of RAM:
 
-```
+```sh
 ./mqjs --memory-limit 10k tests/mandelbrot.js
 ```
 
@@ -45,13 +45,13 @@ Compile and run a program using 10 kB of RAM:
 In addition to normal script execution, `mqjs` can output the compiled
 bytecode to a persistent storage (file or ROM):
 
-```
+```sh
 ./mqjs -o mandelbrot.bin tests/mandelbrot.js
 ```
 
 Then you can run the compiled bytecode as a normal script:
 
-```
+```sh
 ./mqjs mandelbrot.bin
 ```
 
@@ -76,14 +76,14 @@ engines. Here are the main points:
 
 - Arrays cannot have holes. Writing an element after the end is not
   allowed:
-```
+```js
     a = []
     a[0] = 1; // OK to extend the array length
     a[10] = 2; // TypeError
 ```
   If you need an array like object with holes, use a normal object
   instead:
-```  
+```js
     a = {}
     a[0] = 1;
     a[10] = 2;
@@ -91,12 +91,12 @@ engines. Here are the main points:
   `new Array(len)` still works as expected, but the array elements are
   initialized to `undefined`.
   Array literals with holes are a syntax error:
-```  
+```js
     [ 1, , 3 ] // SyntaxError
 ```
 - Only global `eval` is supported so it cannot access to nor modify
   local variables:
-```
+```js
     eval('1 + 2'); // forbidden
     (1, eval)('1 + 2'); // OK
 ```
@@ -125,7 +125,7 @@ engines. Here are the main points:
   used with this common pattern to have a consistent behavior with
   standard JavaScript:
   
-```
+```js
     for(var prop in obj) {
         if (obj.hasOwnProperty(prop)) {
             ...
@@ -134,7 +134,7 @@ engines. Here are the main points:
 ```    
 Always prefer using `for of` instead which is supported with arrays:
 
-```
+```js
     for(var prop of Object.keys(obj)) {
         ...
     }
@@ -196,13 +196,13 @@ MQuickJS has almost no dependency on the C library. In particular it
 does not use `malloc()`, `free()` nor `printf()`. When creating a
 MQuickJS context, a memory buffer must be provided. The engine only
 allocates memory in this buffer:
-
+```c
     JSContext *ctx;
     uint8_t mem_buf[8192];
     ctx = JS_NewContext(mem_buf, sizeof(mem_buf), &js_stdlib);
     ...
     JS_FreeContext(ctx);
-
+```
 `JS_FreeContext(ctx)` is only necessary to call the finalizers of user
 objects as no system memory is allocated by the engine.
 
@@ -223,7 +223,7 @@ MQuickJS API calls. In the other cases, always use a pointer to a
 to release the temporary reference. The opaque value in `JSGCRef` is
 automatically updated when objects move. Example:
 
-```
+```c
 JSValue my_js_func(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
         JSGCRef obj1_ref, obj2_ref;
@@ -349,12 +349,12 @@ bytecode is generated in one pass with several tricks to optimize it
 ## Tests and benchmarks
 
 Running the basic tests:
-``
+``sh
 make test
 ``
 
 Running the QuickJS micro benchmark:
-``
+``sh
 make microbench
 ``
 
@@ -363,7 +363,7 @@ in stricter mode can be downloaded
 [here](https://bellard.org/mquickjs/mquickjs-extras.tar.xz):
 
 Running the V8 octane benchmark:
-``
+``sh
 make octane
 ``
 
