@@ -1,0 +1,38 @@
+{
+  "name": "mquickjs",
+  "version": "1.0.0-esp32",
+  "description": "Micro QuickJS - JavaScript Engine for ESP32 (ESP32 port by Conor O'Neill)",
+  "keywords": "javascript, js, interpreter, embedded, esp32",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/conoro/mquickjs.git"
+  },
+  "authors": [
+    {
+      "name": "Fabrice Bellard"
+    },
+    {
+      "name": "Charlie Gordon"
+    },
+    {
+      "name": "Conor O'Neill"
+    }
+  ],
+  "license": "MIT",
+  "frameworks": "*",
+  "platforms": "espressif32",
+  "build": {
+    "includeDir": ".",
+    "flags": [
+      "-Wno-unused-parameter",
+      "-Wno-sign-compare",
+      "-Wno-unused-variable",
+      "-Wno-unused-function",
+      "-DESP_PLATFORM"
+    ],
+    "srcFilter": [
+      "-<*>",
+      "-<**/*>"
+    ]
+  }
+}

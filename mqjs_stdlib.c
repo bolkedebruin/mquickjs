@@ -386,6 +386,12 @@ static const JSPropDef js_global_object[] = {
 #ifdef CONFIG_LED
     JS_PROP_CLASS_DEF("led", &js_led_obj),
 #endif
+#ifdef CONFIG_FREEBUTTON_LED
+    JS_PROP_CLASS_DEF("led", &js_freebutton_led_obj),
+#endif
+#ifdef CONFIG_FREEBUTTON_BUTTON
+    JS_PROP_CLASS_DEF("button", &js_freebutton_button_obj),
+#endif
     JS_CFUNC_DEF("print", 1, js_print),
 #ifdef CONFIG_CLASS_EXAMPLE
     JS_PROP_CLASS_DEF("Rectangle", &js_rectangle_class),
@@ -393,6 +399,7 @@ static const JSPropDef js_global_object[] = {
 #else
     JS_CFUNC_DEF("gc", 0, js_gc),
     JS_CFUNC_DEF("load", 1, js_load),
+    JS_CFUNC_DEF("loadMapped", 3, js_loadMapped),
     JS_CFUNC_DEF("setTimeout", 2, js_setTimeout),
     JS_CFUNC_DEF("clearTimeout", 1, js_clearTimeout),
 #endif

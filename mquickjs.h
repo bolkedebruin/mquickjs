@@ -366,6 +366,9 @@ JSValue JS_LoadBytecode(JSContext *ctx, const uint8_t *buf);
 /* debug functions */
 void JS_SetLogFunc(JSContext *ctx, JSWriteFunc *write_func);
 void JS_PrintValue(JSContext *ctx, JSValue val);
+
+/* timer processing - call periodically to execute scheduled timers */
+int64_t JS_ProcessTimers(JSContext *ctx);
 #define JS_DUMP_LONG      (1 << 0) /* display object/array content */
 #define JS_DUMP_NOQUOTE   (1 << 1) /* strings: no quote for identifiers */
 /* for low level dumps: don't dump special properties and use specific
