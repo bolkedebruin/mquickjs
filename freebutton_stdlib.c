@@ -70,12 +70,40 @@ static const JSClassDef js_freebutton_button_obj =
     JS_OBJECT_DEF("Button", js_freebutton_button);
 
 /*
+ * FreeButton Sensor API
+ *
+ * JavaScript bindings for sensor reading and monitoring:
+ *   sensor.count()               - Get number of available sensors
+ *   sensor.getValue(sensorId)    - Read current sensor value
+ *   sensor.getType(sensorId)     - Get sensor type name
+ *   sensor.getInfo(sensorId)     - Get sensor information object
+ *   sensor.getAll()              - Get array of all sensor information
+ *   sensor.onChange(sensorId, callback) - Register change event handler
+ *
+ * The actual function implementations are in freebutton_sensor.c which is
+ * compiled separately as part of the ESP32 firmware build.
+ */
+static const JSPropDef js_freebutton_sensor[] = {
+    JS_CFUNC_DEF("count", 0, js_freebutton_sensor_count),
+    JS_CFUNC_DEF("getValue", 1, js_freebutton_sensor_getValue),
+    JS_CFUNC_DEF("getType", 1, js_freebutton_sensor_getType),
+    JS_CFUNC_DEF("getInfo", 1, js_freebutton_sensor_getInfo),
+    JS_CFUNC_DEF("getAll", 0, js_freebutton_sensor_getAll),
+    JS_CFUNC_DEF("onChange", 2, js_freebutton_sensor_onChange),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_freebutton_sensor_obj =
+    JS_OBJECT_DEF("Sensor", js_freebutton_sensor);
+
+/*
  * Include the full standard library
  *
- * We need to define CONFIG_FREEBUTTON_LED and CONFIG_FREEBUTTON_BUTTON
- * before including mqjs_stdlib.c so that the LED and Button objects
- * are added to the global namespace.
+ * We need to define CONFIG_FREEBUTTON_LED, CONFIG_FREEBUTTON_BUTTON,
+ * and CONFIG_FREEBUTTON_SENSOR before including mqjs_stdlib.c so that
+ * the LED, Button, and Sensor objects are added to the global namespace.
  */
 #define CONFIG_FREEBUTTON_LED
 #define CONFIG_FREEBUTTON_BUTTON
+#define CONFIG_FREEBUTTON_SENSOR
 #include "mqjs_stdlib.c"
