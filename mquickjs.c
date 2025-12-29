@@ -15580,20 +15580,15 @@ JSValue js_json_stringify(JSContext *ctx, JSValue *this_val,
                         idx++;
                     }
                 }
+                JS_PUSH_VALUE(ctx, val);
                 if (saved_idx != 0)
                     string_buffer_putc(ctx, b, ',');
                 ctx->sp[1] = JS_NewShortInt(idx + 1);
                 p = JS_VALUE_TO_PTR(ctx->sp[2]);
                 arr = JS_VALUE_TO_PTR(p->u.array.tab);
-                JS_PUSH_VALUE(ctx, val);
                 ret = js_to_quoted_string(ctx, b, arr->arr[idx]);
-                JS_POP_VALUE(ctx, val);
-                if (ret)
-                    goto fail;
                 string_buffer_putc(ctx, b, ':');
-                
-                JS_PUSH_VALUE(ctx, val);
-                ret = JS_StackCheck(ctx, JSON_REC_SIZE);
+                ret |= JS_StackCheck(ctx, JSON_REC_SIZE);
                 JS_POP_VALUE(ctx, val);
                 if (ret)
                     goto fail;

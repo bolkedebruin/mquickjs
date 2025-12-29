@@ -632,7 +632,7 @@ function test_json()
 {
     var a, s, n;
 
-    s = '{"x":1,"y":true,"z":null,"a":[1,2,false],"1234":"str"}';
+    s = '{"1234":"str","x":1,"y":true,"z":null,"a":[1,2,false]}';
     a = JSON.parse(s);
     assert(a.x, 1);
     assert(a.y, true);
