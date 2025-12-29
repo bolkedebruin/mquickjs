@@ -11,9 +11,11 @@
  *   led.count()                       - Get number of available LEDs
  */
 
+// IMPORTANT: Include mquickjs.h FIRST to establish proper type definitions
+// mquickjs.h includes <inttypes.h> which defines stdint types needed by ESP-IDF headers
+#include "mquickjs.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include "mquickjs.h"
 
 // Import the hardware abstraction layer
 #include "../../src/scripting/led_hardware.h"

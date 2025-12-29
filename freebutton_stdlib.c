@@ -97,13 +97,45 @@ static const JSClassDef js_freebutton_sensor_obj =
     JS_OBJECT_DEF("Sensor", js_freebutton_sensor);
 
 /*
+ * FreeButton MQTT API
+ *
+ * JavaScript bindings for MQTT publish/subscribe:
+ *   mqtt.publish(brokerId, topic, payload[, qos, retain])  - Publish message
+ *   mqtt.subscribe(brokerId, topic, callback[, qos])       - Subscribe to topic
+ *   mqtt.unsubscribe(brokerId, topic)                      - Unsubscribe from topic
+ *   mqtt.onConnect(brokerId, callback)                     - Register connect callback
+ *   mqtt.onDisconnect(brokerId, callback)                  - Register disconnect callback
+ *   mqtt.isConnected(brokerId)                             - Check connection status
+ *   mqtt.getBrokerName(brokerId)                           - Get broker name
+ *   mqtt.getBrokerCount()                                  - Get number of brokers
+ *
+ * The actual function implementations are in freebutton_mqtt.c which is
+ * compiled separately as part of the ESP32 firmware build.
+ */
+static const JSPropDef js_freebutton_mqtt[] = {
+    JS_CFUNC_DEF("getBrokerCount", 0, js_freebutton_mqtt_getBrokerCount),
+    JS_CFUNC_DEF("getBrokerName", 1, js_freebutton_mqtt_getBrokerName),
+    JS_CFUNC_DEF("isConnected", 1, js_freebutton_mqtt_isConnected),
+    JS_CFUNC_DEF("publish", 5, js_freebutton_mqtt_publish),
+    JS_CFUNC_DEF("subscribe", 4, js_freebutton_mqtt_subscribe),
+    JS_CFUNC_DEF("unsubscribe", 2, js_freebutton_mqtt_unsubscribe),
+    JS_CFUNC_DEF("onConnect", 2, js_freebutton_mqtt_onConnect),
+    JS_CFUNC_DEF("onDisconnect", 2, js_freebutton_mqtt_onDisconnect),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_freebutton_mqtt_obj =
+    JS_OBJECT_DEF("MQTT", js_freebutton_mqtt);
+
+/*
  * Include the full standard library
  *
  * We need to define CONFIG_FREEBUTTON_LED, CONFIG_FREEBUTTON_BUTTON,
- * and CONFIG_FREEBUTTON_SENSOR before including mqjs_stdlib.c so that
- * the LED, Button, and Sensor objects are added to the global namespace.
+ * CONFIG_FREEBUTTON_SENSOR, and CONFIG_FREEBUTTON_MQTT before including
+ * mqjs_stdlib.c so that the objects are added to the global namespace.
  */
 #define CONFIG_FREEBUTTON_LED
 #define CONFIG_FREEBUTTON_BUTTON
 #define CONFIG_FREEBUTTON_SENSOR
+#define CONFIG_FREEBUTTON_MQTT
 #include "mqjs_stdlib.c"

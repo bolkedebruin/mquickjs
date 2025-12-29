@@ -396,6 +396,9 @@ static const JSPropDef js_global_object[] = {
 #ifdef CONFIG_FREEBUTTON_SENSOR
     JS_PROP_CLASS_DEF("sensor", &js_freebutton_sensor_obj),
 #endif
+#ifdef CONFIG_FREEBUTTON_MQTT
+    JS_PROP_CLASS_DEF("mqtt", &js_freebutton_mqtt_obj),
+#endif
     JS_CFUNC_DEF("print", 1, js_print),
 #ifdef CONFIG_CLASS_EXAMPLE
     JS_PROP_CLASS_DEF("Rectangle", &js_rectangle_class),
