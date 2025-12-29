@@ -10,9 +10,14 @@
 #include <sys/time.h>
 #include "mquickjs.h"
 
+#ifdef EMSCRIPTEN
+// For WASM builds, include stub declarations
+#include "freebutton_stubs_wasm.h"
+#else
 // Import the file system hardware abstraction layer
 #include "../../src/scripting/file_hardware.h"
 #include "../../src/scripting/file_hardware_mmap.h"
+#endif
 
 // Helper to get current time in milliseconds
 static int64_t get_time_ms(void) {
@@ -34,6 +39,12 @@ JSValue js_gc(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
 // Supports both source (.js) and pre-compiled bytecode (.jsc)
 JSValue js_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
     (void)this_val;
+#ifdef EMSCRIPTEN
+    // Not available in WASM builds (only used at runtime, not during compilation)
+    (void)argc;
+    (void)argv;
+    return JS_ThrowError(ctx, JS_CLASS_ERROR, "load() not available in browser");
+#else
     const char *filename;
     JSCStringBuf buf_str;
     uint8_t *buf;
@@ -69,6 +80,7 @@ JSValue js_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
     }
 
     return ret;
+#endif
 }
 
 // Timer support (from mqjs.c)
@@ -166,6 +178,12 @@ JSValue js_performance_now(JSContext *ctx, JSValue *this_val, int argc, JSValue 
 JSValue js_loadMapped(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
     (void)this_val;
 
+#ifdef EMSCRIPTEN
+    // Not available in WASM builds (only used at runtime, not during compilation)
+    (void)argc;
+    (void)argv;
+    return JS_ThrowError(ctx, JS_CLASS_ERROR, "loadMapped() not available in browser");
+#else
     if (argc < 3) {
         return JS_ThrowTypeError(ctx, "loadMapped() requires 3 arguments: partition, offset, size");
     }
@@ -220,6 +238,7 @@ JSValue js_loadMapped(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
     // In production, track these in a list and free when context is destroyed
 
     return ret;
+#endif
 }
 
 // Process timers - call this periodically from your main loop
