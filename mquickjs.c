@@ -2931,19 +2931,23 @@ static JSProperty *js_create_property(JSContext *ctx, JSValue obj,
     return pr;
 }
 
-#define JS_DEF_PROP_FLAGS_LOOKUP  (1 << 0)
-#define JS_DEF_PROP_FLAGS_RET_VAL (1 << 1)
+/* don't do property lookup if not present */
+#define JS_DEF_PROP_LOOKUP  (1 << 0)
+/* return the raw property value */
+#define JS_DEF_PROP_RET_VAL (1 << 1)
+#define JS_DEF_PROP_HAS_VALUE (1 << 2)
+#define JS_DEF_PROP_HAS_GET   (1 << 3)
+#define JS_DEF_PROP_HAS_SET   (1 << 4)
 
 /* XXX: handle arrays and typed arrays */
 static JSValue JS_DefinePropertyInternal(JSContext *ctx, JSValue obj,
                                          JSValue prop, JSValue val,
-                                         JSValue setter, JSPropTypeEnum prop_type,
-                                         int flags)
+                                         JSValue setter, int flags)
 {
     JSProperty *pr;
     JSValueArray *arr;
     JSGCRef obj_ref, prop_ref, val_ref, setter_ref;
-    int ret;
+    int ret, prop_type;
     
     /* move to RAM if needed */
     JS_PUSH_VALUE(ctx, obj);
@@ -2958,16 +2962,23 @@ static JSValue JS_DefinePropertyInternal(JSContext *ctx, JSValue obj,
     if (ret)
         return JS_EXCEPTION;
     
-    if (flags & JS_DEF_PROP_FLAGS_LOOKUP) {
+    if (flags & JS_DEF_PROP_LOOKUP) {
         pr = find_own_property(ctx, JS_VALUE_TO_PTR(obj), prop);
         if (pr) {
-            if (pr->prop_type != prop_type)
-                return JS_ThrowTypeError(ctx, "cannot modify getter/setter/value kind");
-            switch(prop_type) {
-            case JS_PROP_NORMAL:
-                pr->value = val;
-                break;
-            case JS_PROP_GETSET:
+            if (flags & JS_DEF_PROP_HAS_VALUE) {
+                if (pr->prop_type == JS_PROP_NORMAL) {
+                    pr->value = val;
+                } else if (pr->prop_type == JS_PROP_VARREF) {
+                    JSVarRef *pv = JS_VALUE_TO_PTR(pr->value);
+                    pv->u.value = val;
+                } else {
+                    goto error_modify;
+                }
+            } else if (flags & (JS_DEF_PROP_HAS_GET | JS_DEF_PROP_HAS_SET)) {
+                if (pr->prop_type != JS_PROP_GETSET) {
+                error_modify:
+                    return JS_ThrowTypeError(ctx, "cannot modify getter/setter/value kind");
+                }
                 arr = JS_VALUE_TO_PTR(pr->value);
                 if (unlikely(JS_IS_ROM_PTR(ctx, arr))) {
                     /* move to RAM */
@@ -2990,20 +3001,17 @@ static JSValue JS_DefinePropertyInternal(JSContext *ctx, JSValue obj,
                     pr->value = JS_VALUE_FROM_PTR(arr2);
                     arr = arr2;
                 }
-                /* XXX: should add flags to set only getter or setter */
-                if (val != JS_UNDEFINED)
+                if (flags & JS_DEF_PROP_HAS_GET)
                     arr->arr[0] = val;
-                if (setter != JS_UNDEFINED)
+                if (flags & JS_DEF_PROP_HAS_SET)
                     arr->arr[1] = setter;
-                break;
-            default:
-                assert(0);
             }
-            return pr->value;
+            goto done;
         }
     }
 
-    if (prop_type == JS_PROP_GETSET) {
+    if (flags & (JS_DEF_PROP_HAS_GET | JS_DEF_PROP_HAS_SET)) {
+        prop_type = JS_PROP_GETSET;
         JS_PUSH_VALUE(ctx, obj);
         JS_PUSH_VALUE(ctx, prop);
         JS_PUSH_VALUE(ctx, val);
@@ -3018,9 +3026,10 @@ static JSValue JS_DefinePropertyInternal(JSContext *ctx, JSValue obj,
         arr->arr[0] = val;
         arr->arr[1] = setter;
         val = JS_VALUE_FROM_PTR(arr);
-    } else if (prop_type == JS_PROP_VARREF) {
+    } else if (obj == ctx->global_obj) {
         JSVarRef *pv;
         
+        prop_type = JS_PROP_VARREF;
         JS_PUSH_VALUE(ctx, obj);
         JS_PUSH_VALUE(ctx, prop);
         JS_PUSH_VALUE(ctx, val);
@@ -3033,6 +3042,8 @@ static JSValue JS_DefinePropertyInternal(JSContext *ctx, JSValue obj,
         pv->is_detached = TRUE;
         pv->u.value = val;
         val = JS_VALUE_FROM_PTR(pv);
+    } else {
+        prop_type = JS_PROP_NORMAL;
     }
     JS_PUSH_VALUE(ctx, val);
     pr = js_create_property(ctx, obj, prop);
@@ -3041,8 +3052,9 @@ static JSValue JS_DefinePropertyInternal(JSContext *ctx, JSValue obj,
         return JS_EXCEPTION;
     pr->prop_type = prop_type;
     pr->value = val;
-    if (flags & JS_DEF_PROP_FLAGS_RET_VAL) {
-        return val;
+ done:
+    if (flags & JS_DEF_PROP_RET_VAL) {
+        return pr->value;
     } else {
         return JS_UNDEFINED;
     }
@@ -3052,15 +3064,15 @@ static JSValue JS_DefinePropertyValue(JSContext *ctx, JSValue obj,
                                       JSValue prop, JSValue val)
 {
     return JS_DefinePropertyInternal(ctx, obj, prop, val, JS_NULL,
-                                     JS_PROP_NORMAL, JS_DEF_PROP_FLAGS_LOOKUP);
+                                     JS_DEF_PROP_LOOKUP | JS_DEF_PROP_HAS_VALUE);
 }
 
 static JSValue JS_DefinePropertyGetSet(JSContext *ctx, JSValue obj,
                                        JSValue prop, JSValue getter,
-                                       JSValue setter)
+                                       JSValue setter, int flags)
 {
     return JS_DefinePropertyInternal(ctx, obj, prop, getter, setter,
-                                     JS_PROP_GETSET, JS_DEF_PROP_FLAGS_LOOKUP);
+                                     JS_DEF_PROP_LOOKUP | flags);
 }
 
 /* return a JSVarRef or an exception. */
@@ -3084,7 +3096,7 @@ static JSValue add_global_var(JSContext *ctx, JSValue prop, BOOL define_flag)
     }
     return JS_DefinePropertyInternal(ctx, ctx->global_obj, prop,
                                      define_flag ? JS_UNDEFINED : JS_UNINITIALIZED, JS_NULL,
-                                     JS_PROP_VARREF, JS_DEF_PROP_FLAGS_RET_VAL);
+                                     JS_DEF_PROP_RET_VAL | JS_DEF_PROP_HAS_VALUE);
 }
 
 /* return JS_UNDEFINED in the normal case. Otherwise:
@@ -3327,7 +3339,7 @@ static JSValue JS_SetPropertyInternal(JSContext *ctx, JSValue this_obj,
     if (!is_obj)
         return JS_ThrowTypeErrorNotAnObject(ctx);
     return JS_DefinePropertyInternal(ctx, this_obj, prop, val, JS_UNDEFINED,
-                                     this_obj == ctx->global_obj ? JS_PROP_VARREF : JS_PROP_NORMAL, 0);
+                                     JS_DEF_PROP_HAS_VALUE);
 }
 
 JSValue JS_SetPropertyStr(JSContext *ctx, JSValue this_obj,
@@ -3511,7 +3523,7 @@ static void stdlib_init(JSContext *ctx, const JSValueArray *arr)
         }
         JS_DefinePropertyInternal(ctx, ctx->global_obj, name,
                                   val, JS_NULL,
-                                  JS_PROP_VARREF, 0);
+                                  JS_DEF_PROP_HAS_VALUE);
     }
 }
 
@@ -6078,9 +6090,9 @@ JSValue JS_Call(JSContext *ctx, int call_flags)
                 if (opcode == OP_define_field) {
                     val = JS_DefinePropertyValue(ctx, sp[1], prop, sp[0]);
                 } else if (opcode == OP_define_getter)
-                    val = JS_DefinePropertyGetSet(ctx, sp[1], prop, sp[0], JS_UNDEFINED);
+                    val = JS_DefinePropertyGetSet(ctx, sp[1], prop, sp[0], JS_UNDEFINED, JS_DEF_PROP_HAS_GET);
                 else
-                    val = JS_DefinePropertyGetSet(ctx, sp[1], prop, JS_UNDEFINED, sp[0]);
+                    val = JS_DefinePropertyGetSet(ctx, sp[1], prop, JS_UNDEFINED, sp[0], JS_DEF_PROP_HAS_SET);
                 RESTORE();
                 if (unlikely(JS_IsException(val)))
                     goto exception;
@@ -13683,10 +13695,6 @@ JSValue js_object_constructor(JSContext *ctx, JSValue *this_val,
     }
 }
 
-#define DEF_PROP_HAS_VALUE (1 << 0)
-#define DEF_PROP_HAS_GET   (1 << 1)
-#define DEF_PROP_HAS_SET   (1 << 2)
-
 JSValue js_object_defineProperty(JSContext *ctx, JSValue *this_val,
                                  int argc, JSValue *argv)
 {
@@ -13709,32 +13717,44 @@ JSValue js_object_defineProperty(JSContext *ctx, JSValue *this_val,
     setter = JS_UNDEFINED;
     flags = 0;
     if (JS_HasProperty(ctx, *pdesc, js_get_atom(ctx, JS_ATOM_value))) {
-        flags |= DEF_PROP_HAS_VALUE;
+        flags |= JS_DEF_PROP_HAS_VALUE;
         val = JS_GetProperty(ctx, *pdesc, js_get_atom(ctx, JS_ATOM_value));
+        if (JS_IsException(val))
+            return JS_EXCEPTION;
     }
     if (JS_HasProperty(ctx, *pdesc, js_get_atom(ctx, JS_ATOM_get))) {
-        flags |= DEF_PROP_HAS_GET;
+        flags |= JS_DEF_PROP_HAS_GET;
         JS_PUSH_VALUE(ctx, val);
         getter = JS_GetProperty(ctx, *pdesc, js_get_atom(ctx, JS_ATOM_get));
         JS_POP_VALUE(ctx, val);
+        if (JS_IsException(getter))
+            return JS_EXCEPTION;
+        if (!JS_IsUndefined(getter) && !JS_IsFunction(ctx, getter))
+            goto bad_getset;
     }
     if (JS_HasProperty(ctx, *pdesc, js_get_atom(ctx, JS_ATOM_set))) {
-        flags |= DEF_PROP_HAS_SET;
+        flags |= JS_DEF_PROP_HAS_SET;
         JS_PUSH_VALUE(ctx, val);
         JS_PUSH_VALUE(ctx, getter);
         setter = JS_GetProperty(ctx, *pdesc, js_get_atom(ctx, JS_ATOM_set));
         JS_POP_VALUE(ctx, getter);
         JS_POP_VALUE(ctx, val);
+        if (JS_IsException(setter))
+            return JS_EXCEPTION;
+        if (!JS_IsUndefined(setter) && !JS_IsFunction(ctx, setter)) {
+        bad_getset:
+            return JS_ThrowTypeError(ctx, "invalid getter or setter");
+        }
     }
-    if (flags == 0) {
-        return JS_ThrowTypeError(ctx, "unsupported defineProperty");
+    if (flags & (JS_DEF_PROP_HAS_GET | JS_DEF_PROP_HAS_SET)) {
+        if (flags & JS_DEF_PROP_HAS_VALUE)
+            return JS_ThrowTypeError(ctx, "cannot have both value and get/set");
+        val = getter;
     }
-    if (flags & DEF_PROP_HAS_VALUE) {
-        JS_DefinePropertyValue(ctx, *pobj, *pprop, val);
-    } else {
-        /* XXX: check that getter/setter are function or undefined */
-        JS_DefinePropertyGetSet(ctx, *pobj, *pprop, getter, setter);
-    }
+    val = JS_DefinePropertyInternal(ctx, *pobj, *pprop, val, setter,
+                                    flags | JS_DEF_PROP_LOOKUP);
+    if (JS_IsException(val))
+        return val;
     return *pobj;
 }
 

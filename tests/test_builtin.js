@@ -125,12 +125,19 @@ function test()
     assert(a.z, 4, "get");
     a.z = 5;
     assert(a.z_val, 5, "set");
-/*
+
+    Object.defineProperty(a, "w", {});
+    assert("w" in a, true);
+    a.w = 1;
+    
+    Object.defineProperty(a, "w", {});
+    assert(a.w, 1);
+    
     a = { get z() { return 4; }, set z(val) { this.z_val = val; } };
     assert(a.z, 4, "get");
     a.z = 5;
     assert(a.z_val, 5, "set");
-*/
+
     a = {};
     b = Object.create(a);
     assert(Object.getPrototypeOf(b), a, "create");
