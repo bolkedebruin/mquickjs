@@ -19,12 +19,28 @@
 #include <stdlib.h>
 #include <string.h>
 #include "mquickjs.h"
+
+// ESP32-specific includes
+#ifdef ESP_PLATFORM
 #include "esp_log.h"
-
-// Import the binding layer
 #include "../../src/scripting/mqtt_binding.h"
-
 static const char *MQTT_JS_TAG = "MqttJS";
+#else
+// Host build stubs for generator
+#include <stdbool.h>
+#define ESP_LOGI(tag, ...)
+#define ESP_LOGE(tag, ...)
+#define ESP_LOGW(tag, ...)
+static inline int mqtt_binding_get_broker_count(void) { return 0; }
+static inline const char* mqtt_binding_get_broker_name(int id) { return ""; }
+static inline bool mqtt_binding_is_connected(int id) { return false; }
+static inline bool mqtt_binding_publish(int id, const char* topic, const char* payload, int qos, bool retain) { return false; }
+static inline bool mqtt_binding_subscribe(int id, const char* topic, int qos) { return false; }
+static inline bool mqtt_binding_unsubscribe(int id, const char* topic) { return false; }
+static inline void mqtt_binding_register_message_callback(void (*cb)(uint8_t, const char*, const char*, size_t)) {}
+static inline void mqtt_binding_register_connect_callback(void (*cb)(uint8_t)) {}
+static inline void mqtt_binding_register_disconnect_callback(void (*cb)(uint8_t)) {}
+#endif
 
 // Maximum subscriptions per broker
 #define MAX_BROKERS 2
@@ -253,7 +269,11 @@ static void js_mqtt_disconnect_wrapper(uint8_t brokerId) {
  * JavaScript bindings
  */
 
-/* mqtt.getBrokerCount() - Get number of configured brokers */
+/**
+ * @jsapi mqtt.getBrokerCount
+ * @description Get number of configured MQTT brokers
+ * @returns {number} Number of brokers
+ */
 JSValue js_freebutton_mqtt_getBrokerCount(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     (void)this_val;
@@ -264,7 +284,12 @@ JSValue js_freebutton_mqtt_getBrokerCount(JSContext *ctx, JSValue *this_val, int
     return JS_NewInt32(ctx, count);
 }
 
-/* mqtt.getBrokerName(brokerId) - Get broker name */
+/**
+ * @jsapi mqtt.getBrokerName
+ * @description Get MQTT broker name
+ * @param {number} brokerId - Broker ID
+ * @returns {string} Broker name
+ */
 JSValue js_freebutton_mqtt_getBrokerName(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     (void)this_val;
@@ -286,7 +311,12 @@ JSValue js_freebutton_mqtt_getBrokerName(JSContext *ctx, JSValue *this_val, int 
     return JS_NewString(ctx, name);
 }
 
-/* mqtt.isConnected(brokerId) - Check if broker is connected */
+/**
+ * @jsapi mqtt.isConnected
+ * @description Check if MQTT broker is connected
+ * @param {number} brokerId - Broker ID
+ * @returns {boolean} True if connected
+ */
 JSValue js_freebutton_mqtt_isConnected(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     (void)this_val;
@@ -304,7 +334,16 @@ JSValue js_freebutton_mqtt_isConnected(JSContext *ctx, JSValue *this_val, int ar
     return JS_NewBool(connected);
 }
 
-/* mqtt.publish(brokerId, topic, payload[, qos, retain]) - Publish MQTT message */
+/**
+ * @jsapi mqtt.publish
+ * @description Publish MQTT message to topic
+ * @param {number} brokerId - Broker ID
+ * @param {string} topic - MQTT topic
+ * @param {string} payload - Message payload
+ * @param {number} qos - Quality of Service level (0-2) [optional]
+ * @param {number} retain - Retain flag (0 or 1) [optional]
+ * @returns {void}
+ */
 JSValue js_freebutton_mqtt_publish(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     (void)this_val;
@@ -347,7 +386,15 @@ JSValue js_freebutton_mqtt_publish(JSContext *ctx, JSValue *this_val, int argc, 
     return JS_UNDEFINED;
 }
 
-/* mqtt.subscribe(brokerId, topic, callback[, qos]) - Subscribe to MQTT topic */
+/**
+ * @jsapi mqtt.subscribe
+ * @description Subscribe to MQTT topic with callback
+ * @param {number} brokerId - Broker ID
+ * @param {string} topic - MQTT topic (supports wildcards + and #)
+ * @param {Function} callback - Function called with (topic, payload) when message received
+ * @param {number} qos - Quality of Service level (0-2) [optional]
+ * @returns {void}
+ */
 JSValue js_freebutton_mqtt_subscribe(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     (void)this_val;
@@ -432,7 +479,13 @@ JSValue js_freebutton_mqtt_subscribe(JSContext *ctx, JSValue *this_val, int argc
     return JS_UNDEFINED;
 }
 
-/* mqtt.unsubscribe(brokerId, topic) - Unsubscribe from MQTT topic */
+/**
+ * @jsapi mqtt.unsubscribe
+ * @description Unsubscribe from MQTT topic
+ * @param {number} brokerId - Broker ID
+ * @param {string} topic - MQTT topic to unsubscribe from
+ * @returns {void}
+ */
 JSValue js_freebutton_mqtt_unsubscribe(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     (void)this_val;
@@ -475,7 +528,13 @@ JSValue js_freebutton_mqtt_unsubscribe(JSContext *ctx, JSValue *this_val, int ar
     return JS_UNDEFINED;
 }
 
-/* mqtt.onConnect(brokerId, callback) - Register connection event handler */
+/**
+ * @jsapi mqtt.onConnect
+ * @description Register callback for MQTT broker connection event
+ * @param {number} brokerId - Broker ID
+ * @param {Function} callback - Function to call when broker connects
+ * @returns {void}
+ */
 JSValue js_freebutton_mqtt_onConnect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     (void)this_val;
@@ -513,7 +572,13 @@ JSValue js_freebutton_mqtt_onConnect(JSContext *ctx, JSValue *this_val, int argc
     return JS_UNDEFINED;
 }
 
-/* mqtt.onDisconnect(brokerId, callback) - Register disconnection event handler */
+/**
+ * @jsapi mqtt.onDisconnect
+ * @description Register callback for MQTT broker disconnection event
+ * @param {number} brokerId - Broker ID
+ * @param {Function} callback - Function to call when broker disconnects
+ * @returns {void}
+ */
 JSValue js_freebutton_mqtt_onDisconnect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     (void)this_val;

@@ -17,8 +17,18 @@
 #include <stdlib.h>
 #include "mquickjs.h"
 
-// Import the hardware abstraction layer
+// Import the hardware abstraction layer (ESP32 only)
+#ifdef ESP_PLATFORM
 #include "../../src/scripting/button_hardware.h"
+#else
+// Host build stubs for generator
+static inline int button_hw_get_count(void) { return 0; }
+static inline int button_hw_set_label(int pos, const char* label) { return 0; }
+static inline int button_hw_set_top_label(int pos, const char* label) { return 0; }
+static inline void button_hw_register_click_callback(int pos, void (*cb)(int)) {}
+static inline void button_hw_register_long_press_callback(int pos, void (*cb)(int)) {}
+static inline void button_hw_register_release_callback(int pos, void (*cb)(int)) {}
+#endif
 
 // Maximum number of buttons (library limit, actual count from button_hw_get_count())
 // This should be >= BUTTON_COUNT from config.h
@@ -123,14 +133,24 @@ static void js_button_release_wrapper(int position) {
  * JavaScript bindings
  */
 
-/* button.count() - Get number of available buttons */
+/**
+ * @jsapi button.count
+ * @description Get number of available buttons
+ * @returns {number} Number of buttons
+ */
 JSValue js_freebutton_button_count(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     int count = button_hw_get_count();
     return JS_NewInt32(ctx, count);
 }
 
-/* button.setLabel(position, text) - Set button label */
+/**
+ * @jsapi button.setLabel
+ * @description Set button label text
+ * @param {number} position - Button position (1-based)
+ * @param {string} text - Label text to display
+ * @returns {void}
+ */
 JSValue js_freebutton_button_setLabel(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     int position = 0;
@@ -156,7 +176,13 @@ JSValue js_freebutton_button_setLabel(JSContext *ctx, JSValue *this_val, int arg
     return JS_UNDEFINED;
 }
 
-/* button.setTopLabel(position, text) - Set button top label */
+/**
+ * @jsapi button.setTopLabel
+ * @description Set button top label text
+ * @param {number} position - Button position (1-based)
+ * @param {string} text - Top label text to display
+ * @returns {void}
+ */
 JSValue js_freebutton_button_setTopLabel(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     int position = 0;
@@ -182,7 +208,13 @@ JSValue js_freebutton_button_setTopLabel(JSContext *ctx, JSValue *this_val, int 
     return JS_UNDEFINED;
 }
 
-/* button.onClick(position, callback) - Register click event handler */
+/**
+ * @jsapi button.onClick
+ * @description Register click event handler for button
+ * @param {number} position - Button position (1-based)
+ * @param {Function} callback - Function to call on click
+ * @returns {void}
+ */
 JSValue js_freebutton_button_onClick(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     int position = 0;
@@ -224,7 +256,13 @@ JSValue js_freebutton_button_onClick(JSContext *ctx, JSValue *this_val, int argc
     return JS_UNDEFINED;
 }
 
-/* button.onLongPress(position, callback) - Register long press event handler */
+/**
+ * @jsapi button.onLongPress
+ * @description Register long press event handler for button
+ * @param {number} position - Button position (1-based)
+ * @param {Function} callback - Function to call on long press
+ * @returns {void}
+ */
 JSValue js_freebutton_button_onLongPress(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     int position = 0;
@@ -266,7 +304,13 @@ JSValue js_freebutton_button_onLongPress(JSContext *ctx, JSValue *this_val, int 
     return JS_UNDEFINED;
 }
 
-/* button.onRelease(position, callback) - Register release event handler */
+/**
+ * @jsapi button.onRelease
+ * @description Register release event handler for button
+ * @param {number} position - Button position (1-based)
+ * @param {Function} callback - Function to call on release
+ * @returns {void}
+ */
 JSValue js_freebutton_button_onRelease(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     int position = 0;

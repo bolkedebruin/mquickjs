@@ -17,21 +17,36 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-// Import the hardware abstraction layer
+// Import the hardware abstraction layer (ESP32 only)
+#ifdef ESP_PLATFORM
 #include "../../src/scripting/led_hardware.h"
+#else
+// Host build stubs for generator
+static inline int led_hw_get_count(void) { return 0; }
+static inline int led_hw_set_color(int pos, uint8_t r, uint8_t g, uint8_t b) { return 0; }
+#endif
 
 /*
  * JavaScript bindings
  */
 
-/* led.count() - Get number of available LEDs */
+/**
+ * @jsapi led.count
+ * @description Get number of available LEDs
+ * @returns {number} Number of available LEDs
+ */
 JSValue js_freebutton_led_count(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     int count = led_hw_get_count();
     return JS_NewInt32(ctx, count);
 }
 
-/* led.on(position) - Turn LED white at position */
+/**
+ * @jsapi led.on
+ * @description Turn LED white at specified position
+ * @param {number} position - LED position index
+ * @returns {void}
+ */
 JSValue js_freebutton_led_on(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     int position = 0;
@@ -51,7 +66,12 @@ JSValue js_freebutton_led_on(JSContext *ctx, JSValue *this_val, int argc, JSValu
     return JS_UNDEFINED;
 }
 
-/* led.off(position) - Turn LED off at position */
+/**
+ * @jsapi led.off
+ * @description Turn LED off at specified position
+ * @param {number} position - LED position index
+ * @returns {void}
+ */
 JSValue js_freebutton_led_off(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     int position = 0;
@@ -71,7 +91,15 @@ JSValue js_freebutton_led_off(JSContext *ctx, JSValue *this_val, int argc, JSVal
     return JS_UNDEFINED;
 }
 
-/* led.setColor(position, r, g, b) - Set LED color */
+/**
+ * @jsapi led.setColor
+ * @description Set LED RGB color (0-255 for each component)
+ * @param {number} position - LED position index
+ * @param {number} r - Red component (0-255)
+ * @param {number} g - Green component (0-255)
+ * @param {number} b - Blue component (0-255)
+ * @returns {void}
+ */
 JSValue js_freebutton_led_setColor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     int position = 0, r = 0, g = 0, b = 0;

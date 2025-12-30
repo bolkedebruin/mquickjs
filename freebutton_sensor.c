@@ -15,12 +15,26 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "mquickjs.h"
+
+// ESP32-specific includes
+#ifdef ESP_PLATFORM
 #include "esp_log.h"
-
-// Import the hardware abstraction layer
 #include "../../src/scripting/sensor_binding.h"
-
 static const char *TAG = "SensorJS";
+#else
+// Host build stubs for generator
+#include <stdbool.h>
+#define ESP_LOGI(tag, ...)
+#define ESP_LOGE(tag, ...)
+#define ESP_LOGW(tag, ...)
+typedef struct { int id; const char* type; const char* name; const char* unit; float value; bool online; } SensorInfo;
+static inline int sensor_hw_get_count(void) { return 0; }
+static inline float sensor_hw_get_value(int id) { return 0.0f; }
+static inline const char* sensor_hw_get_type(int id) { return ""; }
+static inline const SensorInfo* sensor_hw_get_info(int id) { return NULL; }
+static inline int sensor_hw_get_all_ids(int* ids, int max) { return 0; }
+static inline void sensor_hw_register_change_callback(int id, void (*cb)(int, float)) {}
+#endif
 
 // Maximum number of sensors (must match sensor_binding.cpp)
 #define MAX_SENSORS 8
@@ -83,14 +97,23 @@ static void js_sensor_change_wrapper(int sensorId, float value) {
  * JavaScript bindings
  */
 
-/* sensor.count() - Get number of available sensors */
+/**
+ * @jsapi sensor.count
+ * @description Get number of available sensors
+ * @returns {number} Number of sensors
+ */
 JSValue js_freebutton_sensor_count(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     int count = sensor_hw_get_count();
     return JS_NewInt32(ctx, count);
 }
 
-/* sensor.getValue(sensorId) - Read current sensor value */
+/**
+ * @jsapi sensor.getValue
+ * @description Read current sensor value
+ * @param {number} sensorId - Sensor ID
+ * @returns {number} Current sensor value
+ */
 JSValue js_freebutton_sensor_getValue(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     int sensorId = 0;
@@ -106,7 +129,12 @@ JSValue js_freebutton_sensor_getValue(JSContext *ctx, JSValue *this_val, int arg
     return JS_NewFloat64(ctx, (double)value);
 }
 
-/* sensor.getType(sensorId) - Get sensor type name */
+/**
+ * @jsapi sensor.getType
+ * @description Get sensor type name
+ * @param {number} sensorId - Sensor ID
+ * @returns {string} Sensor type (e.g., "temperature", "humidity")
+ */
 JSValue js_freebutton_sensor_getType(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     int sensorId = 0;
@@ -126,7 +154,12 @@ JSValue js_freebutton_sensor_getType(JSContext *ctx, JSValue *this_val, int argc
     return JS_NewString(ctx, type);
 }
 
-/* sensor.getInfo(sensorId) - Get sensor information object */
+/**
+ * @jsapi sensor.getInfo
+ * @description Get sensor information object
+ * @param {number} sensorId - Sensor ID
+ * @returns {object} Sensor info with properties: id, name, type, unit, online
+ */
 JSValue js_freebutton_sensor_getInfo(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     int sensorId = 0;
@@ -156,7 +189,11 @@ JSValue js_freebutton_sensor_getInfo(JSContext *ctx, JSValue *this_val, int argc
     return obj;
 }
 
-/* sensor.getAll() - Get array of all sensor information */
+/**
+ * @jsapi sensor.getAll
+ * @description Get array of all sensor information objects
+ * @returns {object[]} Array of sensor info objects
+ */
 JSValue js_freebutton_sensor_getAll(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     // Get all sensor IDs
@@ -184,7 +221,13 @@ JSValue js_freebutton_sensor_getAll(JSContext *ctx, JSValue *this_val, int argc,
     return arr;
 }
 
-/* sensor.onChange(sensorId, callback) - Register change event handler */
+/**
+ * @jsapi sensor.onChange
+ * @description Register change event handler for sensor value changes
+ * @param {number} sensorId - Sensor ID
+ * @param {Function} callback - Function to call when sensor value changes
+ * @returns {void}
+ */
 JSValue js_freebutton_sensor_onChange(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     int sensorId = 0;
