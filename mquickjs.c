@@ -12859,8 +12859,6 @@ static void bc_reloc_value(BCRelocState *s, JSValue *pval)
 
     val = *pval;
     if (JS_IsPtr(val)) {
-        val += s->offset;
-
         /* unique strings must be unique, so modify the unique string
            value if it already exists in the context */
         if (s->update_atoms) {
@@ -12868,15 +12866,23 @@ static void bc_reloc_value(BCRelocState *s, JSValue *pval)
             if (p->mtag == JS_MTAG_STRING && p->is_unique) {
                 const JSValueArray *arr1;
                 int a, i;
+                str = JS_NULL;
                 for(i = 0; i < ctx->n_rom_atom_tables; i++) {
                     arr1 = ctx->rom_atom_tables[i];
-                    str = find_atom(ctx, &a, arr1, arr1->size, val); 
+                    str = find_atom(ctx, &a, arr1, arr1->size, val);
                     if (!JS_IsNull(str)) {
                         val = str;
                         break;
                     }
                 }
+                if (JS_IsNull(str)) {
+                    val += s->offset;
+                }
+            } else {
+                val += s->offset;
             }
+        } else {
+            val += s->offset;
         }
         *pval = val;
     }
