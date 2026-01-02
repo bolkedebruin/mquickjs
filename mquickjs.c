@@ -11873,6 +11873,51 @@ static int get_mblock_size(const void *ptr)
     return size;
 }
 
+/* Public API: Get size of a memory block in bytes */
+size_t JS_GetMemBlockSize(const void *ptr)
+{
+    return (size_t)get_mblock_size(ptr);
+}
+
+/* Public API: Get memory tag (type) of a block */
+int JS_GetMemBlockMTag(const void *ptr)
+{
+    return ((JSMemBlockHeader *)ptr)->mtag;
+}
+
+/* Public API: Get ROM atom table count */
+int JS_GetContextRomAtomTableCount(JSContext *ctx)
+{
+    return ctx ? ctx->n_rom_atom_tables : 0;
+}
+
+/* Get the stdlib ROM atom table for ROM detection (v0x0002 bytecode)
+ * Returns void* to avoid exposing internal JSValueArray structure */
+void* JS_GetStdlibAtomTable(JSContext *ctx)
+{
+    if (ctx && ctx->n_rom_atom_tables > 0) {
+        return (void*)ctx->rom_atom_tables[0];  /* First table is stdlib */
+    }
+    return NULL;
+}
+
+/* Get size of ROM atom table - safe accessor for internal structure */
+uint32_t JS_GetRomAtomTableSize(const void* table)
+{
+    if (!table) return 0;
+    const JSValueArray *arr = (const JSValueArray*)table;
+    return arr->size;
+}
+
+/* Get ROM atom entry by index - safe accessor for internal structure */
+JSValue JS_GetRomAtomEntry(const void* table, int index)
+{
+    if (!table) return JS_UNDEFINED;
+    const JSValueArray *arr = (const JSValueArray*)table;
+    if (index < 0 || index >= (int)arr->size) return JS_UNDEFINED;
+    return arr->arr[index];
+}
+
 /* gc mark pass */
 
 typedef struct {
@@ -12494,6 +12539,8 @@ void JS_PrepareBytecode(JSContext *ctx,
     hdr->base_addr = (uintptr_t)ctx->heap_base;
     hdr->unique_strings =  ctx->unique_strings;
     hdr->main_func = eval_code;
+    hdr->rom_atom_count = 0;   /* v0x0001 has no ROM table */
+    hdr->reserved = 0;
 
     *pdata_buf = ctx->heap_base;
     *pdata_len = ctx->heap_free - ctx->heap_base;
@@ -12836,6 +12883,8 @@ int JS_PrepareBytecode64to32(JSContext *ctx,
     hdr->base_addr = 0;
     hdr->unique_strings =  ctx->unique_strings;
     hdr->main_func = eval_code;
+    hdr->rom_atom_count = 0;   /* v0x0001 has no ROM table */
+    hdr->reserved = 0;
 
     *pdata_buf = ctx->heap_base;
     *pdata_len = ctx->heap_free - ctx->heap_base;
@@ -12851,89 +12900,288 @@ BOOL JS_IsBytecode(const uint8_t *buf, size_t buf_len)
 
 typedef struct {
     JSContext *ctx;
-    uintptr_t offset;
+    uintptr_t offset;        // Relocation offset (target - base)
     BOOL update_atoms;
+    uintptr_t current_ptr;   // Current position in bytecode buffer (for ROM translation)
+    uint32_t data_offset;    // Offset from start of bytecode data (for ROM table lookup)
+    void* rom_collect_buf;   // ROM collection buffer (WASM only, for building ROM table)
+    int* rom_collect_count;  // ROM collection count (WASM only)
 } BCRelocState;
+
+/* Enable ROM translation debugging on ESP32 */
+#ifndef EMSCRIPTEN
+#define DEBUG_ROM_TRANSLATION 1
+#endif
+
+/* ROM Atom Table Builder (for WASM ROM collection) */
+#ifdef EMSCRIPTEN
+typedef struct {
+    uint32_t offset;
+    uint16_t rom_index;
+} ROMAtomTableBuilder;
+
+/* Helper functions for ROM collection in WASM */
+extern void* JS_GetStdlibAtomTable(JSContext* ctx);
+extern uint32_t JS_GetRomAtomTableSize(const void* table);
+extern JSValue JS_GetRomAtomEntry(const void* table, int index);
+
+/* Global ROM collection buffer (WASM only) */
+static void* g_rom_collect_buf = NULL;
+static int* g_rom_collect_count = NULL;
+
+void JS_SetRomCollectionBuffer(JSContext *ctx, void* buf, int* count) {
+    g_rom_collect_buf = buf;
+    g_rom_collect_count = count;
+}
+
+void JS_ClearRomCollectionBuffer(JSContext *ctx) {
+    g_rom_collect_buf = NULL;
+    g_rom_collect_count = NULL;
+}
+#endif
+
+/* Global ROM translation table for v0x0002 bytecode (zero allocation - points to flash)
+ * Non-static so BytecodeWriter can set it up during streaming relocation */
+const ROMAtomEntry* g_rom_translation_table = NULL;
+uint16_t g_rom_translation_count = 0;
+
+/* Translate WASM ROM pointers to ESP32 ROM pointers using ROM translation table
+ * The table maps bytecode_offset → rom_index for v0x0002 bytecode */
+static JSValue lookup_rom_translation(JSContext *ctx, uintptr_t bytecode_offset)
+{
+    if (!g_rom_translation_table || g_rom_translation_count == 0)
+        return JS_UNDEFINED;
+
+#ifdef DEBUG_ROM_TRANSLATION
+    printf("[ROM] Looking up offset 0x%lx in table (%u entries)\n",
+           (unsigned long)bytecode_offset, g_rom_translation_count);
+#endif
+
+    // Linear search through ROM translation table
+    // (Table is small, typically < 20 entries, so linear search is fine)
+    for (int i = 0; i < g_rom_translation_count; i++) {
+#ifdef DEBUG_ROM_TRANSLATION
+        printf("[ROM]   [%d] offset=0x%lx, rom_index=%u\n",
+               i, (unsigned long)g_rom_translation_table[i].bytecode_offset,
+               g_rom_translation_table[i].rom_index);
+#endif
+        if (g_rom_translation_table[i].bytecode_offset == bytecode_offset) {
+            // Found! Translate ROM atom index → ESP32 ROM pointer
+            uint16_t rom_index = g_rom_translation_table[i].rom_index;
+
+#ifdef DEBUG_ROM_TRANSLATION
+            printf("[ROM] MATCH at entry %d! rom_index=%u\n", i, rom_index);
+#endif
+
+            // Get ROM atom from ESP32's ROM table (stdlib)
+            if (ctx->n_rom_atom_tables > 0) {
+                const JSValueArray *rom_table = ctx->rom_atom_tables[0];
+                if (rom_index < rom_table->size) {
+                    JSValue esp32_ptr = rom_table->arr[rom_index];
+#ifdef DEBUG_ROM_TRANSLATION
+                    printf("[ROM] Translated to ESP32 pointer: 0x%llx\n",
+                           (unsigned long long)esp32_ptr);
+#endif
+                    return esp32_ptr;
+                }
+            }
+
+            // Failed to translate - ROM index out of range
+#ifdef DEBUG_ROM_TRANSLATION
+            printf("[ROM] ERROR: ROM index %u out of range!\n", rom_index);
+#endif
+            return JS_UNDEFINED;
+        }
+    }
+
+#ifdef DEBUG_ROM_TRANSLATION
+    printf("[ROM] No match found for offset 0x%lx\n", (unsigned long)bytecode_offset);
+#endif
+    return JS_UNDEFINED;  // Not a ROM atom at this offset
+}
 
 static void bc_reloc_value(BCRelocState *s, JSValue *pval)
 {
     JSContext *ctx = s->ctx;
     JSString *p;
-    JSValue val, str;
+    JSValue val, str, val_relocated;
 
     val = *pval;
-    if (JS_IsPtr(val)) {
-        val += s->offset;
 
+    /* WASM: ROM collection mode - record ROM atoms for building ROM table */
+#ifdef EMSCRIPTEN
+    if (g_rom_collect_buf && g_rom_collect_count && JS_IsPtr(val)) {
+        // Check if this value is a ROM atom
+        void* rom_table = JS_GetStdlibAtomTable(ctx);
+        if (rom_table) {
+            uint32_t rom_size = JS_GetRomAtomTableSize(rom_table);
+            uintptr_t ptr = (uintptr_t)JS_VALUE_TO_PTR(val);
+
+            for (int i = 0; i < (int)rom_size; i++) {
+                JSValue entry = JS_GetRomAtomEntry(rom_table, i);
+                if (JS_IsPtr(entry) && (uintptr_t)JS_VALUE_TO_PTR(entry) == ptr) {
+                    // Found ROM atom! Record it and return (don't process further)
+                    uint32_t bytecode_offset = s->data_offset + ((uintptr_t)pval - s->current_ptr);
+                    ROMAtomTableBuilder* table = (ROMAtomTableBuilder*)g_rom_collect_buf;
+                    int idx = *g_rom_collect_count;
+
+                    table[idx].offset = bytecode_offset;
+                    table[idx].rom_index = i;
+                    (*g_rom_collect_count)++;
+
+                    printf("[WASM ROM COLLECT] Found ROM atom at offset 0x%x: rom_index=%d\n",
+                           bytecode_offset, i);
+                    return;  // Exit early - don't process ROM atoms with update_atoms
+                }
+            }
+        }
+    }
+#endif
+
+    /* v0x0002: Check ROM translation table FIRST (for cross-compiled bytecode) */
+    if (JS_IsPtr(val) && g_rom_translation_table && s->current_ptr) {
+        // Calculate ABSOLUTE offset of this JSValue within the bytecode data
+        // = data_offset (position of current chunk) + offset within chunk
+        uint32_t chunk_offset = (uintptr_t)pval - s->current_ptr;
+        uint32_t bytecode_offset = s->data_offset + chunk_offset;
+
+#ifdef DEBUG_ROM_TRANSLATION
+        printf("[bc_reloc_value] Checking ptr value: 0x%llx, absolute_offset: 0x%x (data_offset=0x%x + chunk_offset=0x%x)\n",
+               (unsigned long long)val, bytecode_offset, s->data_offset, chunk_offset);
+#endif
+
+        JSValue translated = lookup_rom_translation(ctx, bytecode_offset);
+
+        if (!JS_IsUndefined(translated)) {
+            /* Found ROM atom - replace WASM pointer with ESP32 ROM pointer */
+#ifdef DEBUG_ROM_TRANSLATION
+            printf("[bc_reloc_value] ROM translation successful! 0x%llx → 0x%llx\n",
+                   (unsigned long long)val, (unsigned long long)translated);
+#endif
+            *pval = translated;
+            return;
+        }
+    }
+
+    if (JS_IsPtr(val)) {
         /* unique strings must be unique, so modify the unique string
            value if it already exists in the context */
         if (s->update_atoms) {
-            p = JS_VALUE_TO_PTR(val);
+#ifdef EMSCRIPTEN
+            printf("[bc_reloc_value] Checking atom: val=0x%lx (before reloc)\n", (unsigned long)val);
+#endif
+            // CRITICAL FIX: Relocate FIRST to get a valid pointer
+            // This allows streaming from position-independent bytecode (base_addr=0)
+            // where val is an offset, not a valid pointer yet
+            val_relocated = val + s->offset;
+
+            // NOW we can safely dereference the relocated pointer
+            p = JS_VALUE_TO_PTR(val_relocated);
+#ifdef EMSCRIPTEN
+            printf("[bc_reloc_value] Got ptr: p=%p, mtag=%d\n", (void*)p, p->mtag);
+#endif
             if (p->mtag == JS_MTAG_STRING && p->is_unique) {
+                // Unique string - search for existing atom in ROM tables
                 const JSValueArray *arr1;
                 int a, i;
+                str = JS_NULL;  // Initialize before search
+#ifdef EMSCRIPTEN
+                printf("[bc_reloc_value] Unique string found, searching %d tables\n", ctx->n_rom_atom_tables);
+#endif
                 for(i = 0; i < ctx->n_rom_atom_tables; i++) {
                     arr1 = ctx->rom_atom_tables[i];
-                    str = find_atom(ctx, &a, arr1, arr1->size, val); 
+#ifdef EMSCRIPTEN
+                    printf("[bc_reloc_value] Searching table %d: arr=%p, size=%d\n", i, (void*)arr1, arr1 ? arr1->size : -1);
+#endif
+                    // Search using relocated value, not original offset
+                    str = find_atom(ctx, &a, arr1, arr1->size, val_relocated);
                     if (!JS_IsNull(str)) {
-                        val = str;
+#ifdef EMSCRIPTEN
+                        printf("[bc_reloc_value] Found in ROM atom table, replacing 0x%lx with ROM value 0x%llx\n",
+                               (unsigned long)*pval, (unsigned long long)str);
+#endif
+                        val = str;  // Replace with ROM atom pointer
                         break;
                     }
                 }
+                // If not found in ROM, use relocated value
+                if (JS_IsNull(str)) {
+#ifdef EMSCRIPTEN
+                    printf("[bc_reloc_value] Not found in ROM, using relocated value\n");
+#endif
+                    val = val_relocated;
+                }
+            } else {
+                // Not a unique string, just use relocated value
+                val = val_relocated;
             }
+        } else {
+            // update_atoms is false, just relocate
+#ifdef EMSCRIPTEN
+            printf("[bc_reloc_value] update_atoms=0, relocating ptr: 0x%lx -> 0x%lx (offset=0x%lx)\n",
+                   (unsigned long)val, (unsigned long)(val + s->offset), (unsigned long)s->offset);
+#endif
+            val += s->offset;
         }
         *pval = val;
     }
 }
 
-int JS_RelocateBytecode2(JSContext *ctx, JSBytecodeHeader *hdr,
-                         uint8_t *buf, uint32_t buf_len,
-                         uintptr_t new_base_addr, BOOL update_atoms)
+int JS_RelocateHdr(BCRelocState *s, JSBytecodeHeader *hdr, uintptr_t new_base_addr)
 {
-    uint8_t *ptr, *p_end;
-    int size, mtag;
-    BCRelocState ss, *s = &ss;
-    
     if (hdr->magic != JS_BYTECODE_MAGIC)
         return -1;
-    if (hdr->version != JS_BYTECODE_VERSION)
-        return -1;
 
-    /* XXX: add atom checksum to avoid problems if the stdlib is
-       modified */
-    s->ctx = ctx;
-    s->offset = new_base_addr - hdr->base_addr;
-    s->update_atoms = update_atoms;
+    // Check version: accept both v0x0001 and v0x0002, verify 64-bit indicator matches
+    uint16_t version_base = hdr->version & 0x7FFF;  // Lower 15 bits
+    uint16_t version_64bit = hdr->version & 0x8000; // Bit 15
+    uint16_t expected_64bit = JS_BYTECODE_VERSION & 0x8000;
+
+    if (version_64bit != expected_64bit)
+        return -1;  // 32-bit vs 64-bit mismatch
+
+    if (version_base != JS_BYTECODE_VERSION_32_V1 && version_base != JS_BYTECODE_VERSION_32_V2)
+        return -1;  // Unknown version
 
     bc_reloc_value(s, &hdr->unique_strings);
     bc_reloc_value(s, &hdr->main_func);
 
-    ptr = buf;
-    p_end = buf + buf_len;
-    while (ptr < p_end) {
-        size = get_mblock_size(ptr);
-        mtag = ((JSMemBlockHeader *)ptr)->mtag;
-        switch(mtag) {
+    hdr->base_addr = new_base_addr;
+    return 0;
+}
+
+int JS_RelocateMtag(BCRelocState *s, uint8_t *buf, uint32_t buf_len)
+{
+    int mtag;
+
+    if (get_mblock_size(buf) != buf_len)
+        return -1;
+
+    // Set current_ptr for ROM translation offset calculations
+    s->current_ptr = (uintptr_t)buf;
+
+    mtag = ((JSMemBlockHeader *)buf)->mtag;
+    switch(mtag) {
         case JS_MTAG_FUNCTION_BYTECODE:
-            {
-                JSFunctionBytecode *b = (JSFunctionBytecode *)ptr;
-                bc_reloc_value(s, &b->func_name);
-                bc_reloc_value(s, &b->byte_code);
-                bc_reloc_value(s, &b->cpool);
-                bc_reloc_value(s, &b->vars);
-                bc_reloc_value(s, &b->ext_vars);
-                bc_reloc_value(s, &b->filename);
-                bc_reloc_value(s, &b->pc2line);
-            }
+        {
+            JSFunctionBytecode *b = (JSFunctionBytecode *)buf;
+            bc_reloc_value(s, &b->func_name);
+            bc_reloc_value(s, &b->byte_code);
+            bc_reloc_value(s, &b->cpool);
+            bc_reloc_value(s, &b->vars);
+            bc_reloc_value(s, &b->ext_vars);
+            bc_reloc_value(s, &b->filename);
+            bc_reloc_value(s, &b->pc2line);
+        }
             break;
         case JS_MTAG_VALUE_ARRAY:
-            {
-                JSValueArray *p = (JSValueArray *)ptr;
-                int i;
-                for(i = 0; i < p->size; i++) {
-                    bc_reloc_value(s, &p->arr[i]);
-                }
+        {
+            JSValueArray *p = (JSValueArray *)buf;
+            int i;
+            for(i = 0; i < p->size; i++) {
+                bc_reloc_value(s, &p->arr[i]);
             }
+        }
             break;
         case JS_MTAG_STRING:
         case JS_MTAG_FLOAT64:
@@ -12941,27 +13189,111 @@ int JS_RelocateBytecode2(JSContext *ctx, JSBytecodeHeader *hdr,
             break;
         default:
             abort();
-        }
+    }
+    return 0;
+}
+
+int JS_RelocateBytecode2(JSContext *ctx, JSBytecodeHeader *hdr,
+                         uint8_t *buf, uint32_t buf_len,
+                         uintptr_t new_base_addr, BOOL update_atoms)
+{
+    uint8_t *ptr, *p_end;
+    int size;
+    BCRelocState ss, *s = &ss;
+
+    /* XXX: add atom checksum to avoid problems if the stdlib is
+       modified */
+    s->ctx = ctx;
+    s->offset = new_base_addr - hdr->base_addr;
+    s->update_atoms = update_atoms;
+    s->current_ptr = 0;  // Will be set by JS_RelocateMtag() for each block
+    s->data_offset = 0;  // Track position in bytecode data
+
+#ifdef EMSCRIPTEN
+    printf("[JS_RelocateBytecode2] *** MODE: update_atoms=%d (%s) ***\n",
+           update_atoms, update_atoms ? "ROM atom replacement ENABLED" : "ALL atoms embedded in bytecode");
+    printf("[JS_RelocateBytecode2] old_base=0x%lx, new_base=0x%lx, offset=0x%lx\n",
+           (unsigned long)hdr->base_addr, (unsigned long)new_base_addr, (unsigned long)s->offset);
+#endif
+
+    if (JS_RelocateHdr(s, hdr, new_base_addr) != 0)
+        return -1;
+
+    ptr = buf;
+    p_end = buf + buf_len;
+    while (ptr < p_end) {
+        size = get_mblock_size(ptr);
+
+        if (JS_RelocateMtag(s, ptr, size) != 0)
+            return -1;
+
         ptr += size;
+        s->data_offset += size;  // Update position for next block
     }
     hdr->base_addr = new_base_addr;
     return 0;
 }
 
+/* Get ROM atom translation table size from bytecode header
+   Returns 0 for v0x0001, or N * sizeof(ROMAtomEntry) for v0x0002 */
+size_t JS_GetRomTableSize(const JSBytecodeHeader *hdr)
+{
+    if (!hdr)
+        return 0;
+
+    /* Check if this is v0x0002 bytecode (mask off 64-bit flag) */
+    uint16_t version_base = hdr->version & 0x7FFF;
+    if (version_base == JS_BYTECODE_VERSION_32_V2) {
+        return hdr->rom_atom_count * sizeof(ROMAtomEntry);
+    }
+
+    return 0;  /* v0x0001 or other versions have no ROM table */
+}
+
 /* Relocate the bytecode in 'buf' so that it can be executed
-   later. Return 0 if OK, != 0 if error */
+   later. Return 0 if OK, != 0 if error
+   Supports both v0x0001 (legacy) and v0x0002 (with ROM atom translation) */
 int JS_RelocateBytecode(JSContext *ctx,
                         uint8_t *buf, uint32_t buf_len)
 {
     uint8_t *data_ptr;
+    JSBytecodeHeader *hdr;
 
     if (buf_len < sizeof(JSBytecodeHeader))
         return -1;
-    data_ptr = buf + sizeof(JSBytecodeHeader);
-    return JS_RelocateBytecode2(ctx, (JSBytecodeHeader *)buf,
-                                data_ptr,
-                                buf_len - sizeof(JSBytecodeHeader),
-                                (uintptr_t)data_ptr, TRUE);
+
+    hdr = (JSBytecodeHeader *)buf;
+
+    /* Check bytecode version (mask off 64-bit flag) */
+    if ((hdr->version & 0x7FFF) == JS_BYTECODE_VERSION_32_V2) {
+        /* v0x0002: Bytecode with ROM atom translation table */
+
+        /* Set up ROM translation table (points to flash - zero allocation) */
+        g_rom_translation_table = (const ROMAtomEntry*)(buf + sizeof(JSBytecodeHeader));
+        g_rom_translation_count = hdr->rom_atom_count;
+
+        /* Data starts after header + ROM table */
+        size_t table_size = hdr->rom_atom_count * sizeof(ROMAtomEntry);
+        data_ptr = buf + sizeof(JSBytecodeHeader) + table_size;
+        uint32_t data_len = buf_len - sizeof(JSBytecodeHeader) - table_size;
+
+        /* Relocate with update_atoms=0 (ROM translation handles atoms) */
+        int result = JS_RelocateBytecode2(ctx, hdr, data_ptr, data_len,
+                                         (uintptr_t)data_ptr, FALSE);
+
+        /* Clear ROM translation table */
+        g_rom_translation_table = NULL;
+        g_rom_translation_count = 0;
+
+        return result;
+    } else {
+        /* v0x0001 or older: Standard bytecode without ROM table */
+        data_ptr = buf + sizeof(JSBytecodeHeader);
+        return JS_RelocateBytecode2(ctx, hdr,
+                                    data_ptr,
+                                    buf_len - sizeof(JSBytecodeHeader),
+                                    (uintptr_t)data_ptr, TRUE);
+    }
 }
 
 /* Load the precompiled bytecode from 'buf'. 'buf' must be allocated
@@ -12971,7 +13303,7 @@ int JS_RelocateBytecode(JSContext *ctx,
 JSValue JS_LoadBytecode(JSContext *ctx, const uint8_t *buf)
 {
     const JSBytecodeHeader *hdr = (const JSBytecodeHeader *)buf;
-    
+
     if (ctx->unique_strings_len != 0)
         return JS_ThrowInternalError(ctx, "no atom must be defined in RAM");
     /* XXX: could stack atom_tables */
@@ -12981,10 +13313,18 @@ JSValue JS_LoadBytecode(JSContext *ctx, const uint8_t *buf)
         return JS_ThrowInternalError(ctx, "invalid bytecode magic");
     if ((hdr->version & 0x8000) != (JS_BYTECODE_VERSION & 0x8000))
         return JS_ThrowInternalError(ctx, "bytecode not saved for %d-bit", JSW * 8);
-    if (hdr->version != JS_BYTECODE_VERSION)
+
+    // Check version: accept both v0x0001 and v0x0002
+    uint16_t version_base = hdr->version & 0x7FFF;
+    if (version_base != JS_BYTECODE_VERSION_32_V1 && version_base != JS_BYTECODE_VERSION_32_V2)
         return JS_ThrowInternalError(ctx, "invalid bytecode version");
-    if (hdr->base_addr != (uintptr_t)(hdr + 1))
+
+    // For v0x0002, base_addr points after ROM table; for v0x0001, after header
+    size_t rom_table_size = JS_GetRomTableSize(hdr);
+    uintptr_t expected_base_addr = (uintptr_t)(hdr + 1) + rom_table_size;
+    if (hdr->base_addr != expected_base_addr)
         return JS_ThrowInternalError(ctx, "bytecode not relocated");
+
     ctx->rom_atom_tables[ctx->n_rom_atom_tables++] = (JSValueArray *)JS_VALUE_TO_PTR(hdr->unique_strings);
     return hdr->main_func;
 }

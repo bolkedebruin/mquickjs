@@ -319,6 +319,8 @@ void JS_PushArg(JSContext *ctx, JSValue val);
 JSValue JS_Call(JSContext *ctx, int call_flags);
 
 #define JS_BYTECODE_MAGIC   0xacfb
+#define JS_BYTECODE_VERSION_32_V1  0x0001  /* Original 32-bit bytecode */
+#define JS_BYTECODE_VERSION_32_V2  0x0002  /* With ROM atom translation table */
 
 typedef struct {
     uint16_t magic; /* JS_BYTECODE_MAGIC */
@@ -326,7 +328,16 @@ typedef struct {
     uintptr_t base_addr;
     JSValue unique_strings;
     JSValue main_func;
+    uint16_t rom_atom_count;  /* v0x0002: number of ROM atoms (0 for v0x0001) */
+    uint16_t reserved;        /* v0x0002: padding for alignment */
 } JSBytecodeHeader;
+
+/* ROM atom translation table entry (v0x0002 only) - follows header in bytecode */
+typedef struct {
+    uint32_t bytecode_offset; /* Offset from base_addr where ROM pointer appears */
+    uint16_t rom_index;       /* Index into js_stdlib unique_strings array */
+    uint16_t padding;         /* Alignment */
+} ROMAtomEntry;
 
 /* only used on the host when compiling to file */
 void JS_PrepareBytecode(JSContext *ctx,
@@ -344,6 +355,8 @@ typedef struct {
     uint32_t base_addr;
     uint32_t unique_strings;
     uint32_t main_func;
+    uint16_t rom_atom_count;  /* v0x0002: number of ROM atoms (0 for v0x0001) */
+    uint16_t reserved;        /* v0x0002: padding for alignment */
 } JSBytecodeHeader32;
 
 /* only used on the host when compiling to file. A 32 bit bytecode is generated on a 64 bit host. */
@@ -354,6 +367,9 @@ int JS_PrepareBytecode64to32(JSContext *ctx,
 #endif
 
 JS_BOOL JS_IsBytecode(const uint8_t *buf, size_t buf_len);
+
+/* Helper: Get ROM table size from header (0 for v0x0001, N*8 for v0x0002) */
+size_t JS_GetRomTableSize(const JSBytecodeHeader *hdr);
 /* Relocate the bytecode in 'buf' so that it can be executed
    later. Return 0 if OK, != 0 if error */
 int JS_RelocateBytecode(JSContext *ctx,
@@ -382,5 +398,48 @@ void JS_DumpValueF(JSContext *ctx, const char *str,
 void JS_DumpValue(JSContext *ctx, const char *str,
                   JSValue val);
 void JS_DumpMemory(JSContext *ctx, JS_BOOL is_long);
+
+/* Bytecode relocation helpers - expose internal memory block information */
+
+/* Get size of a memory block in bytes */
+size_t JS_GetMemBlockSize(const void *ptr);
+
+/* Get memory tag (type) of a block */
+int JS_GetMemBlockMTag(const void *ptr);
+
+/*
+ * Memory block structures for relocation (match internal layout)
+ * Note: The actual tag values are defined internally in mquickjs_priv.h
+ * These structures allow external code to perform relocation
+ */
+
+#define JS_MB_HEADER_PUBLIC \
+    JSWord gc_mark: 1; \
+    JSWord mtag: 3
+
+typedef struct JSFunctionBytecodePublic {
+    JS_MB_HEADER_PUBLIC;
+    JSWord has_arguments : 1;
+    JSWord has_local_func_name : 1;
+    JSWord has_column : 1;
+    JSWord arg_count : 16;
+    JSWord dummy: (JSW * 8 - 4 - 3 - 16);
+    JSValue func_name;
+    JSValue byte_code;
+    JSValue cpool;
+    JSValue vars;
+    JSValue ext_vars;
+    uint16_t stack_size;
+    uint16_t ext_vars_len;
+    JSValue filename;
+    JSValue pc2line;
+    uint32_t source_pos;
+} JSFunctionBytecodePublic;
+
+typedef struct JSValueArrayPublic {
+    JS_MB_HEADER_PUBLIC;
+    JSWord size: (JSW * 8 - 4);
+    JSValue arr[];
+} JSValueArrayPublic;
 
 #endif /* MQUICKJS_H */

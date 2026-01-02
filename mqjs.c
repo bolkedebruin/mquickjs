@@ -1,4 +1,4 @@
-save /*
+/*
  * Micro QuickJS REPL
  *
  * Copyright (c) 2017-2025 Fabrice Bellard

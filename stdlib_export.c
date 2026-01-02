@@ -10,6 +10,11 @@
 #include <sys/time.h>
 #include "mquickjs.h"
 
+#ifndef EMSCRIPTEN
+#include <esp_crc.h>
+#include <esp_log.h>
+#endif
+
 #ifdef EMSCRIPTEN
 // For WASM builds, include stub declarations
 #include "freebutton_stubs_wasm.h"
@@ -17,6 +22,18 @@
 // Import the file system hardware abstraction layer
 #include "../../src/scripting/file_hardware.h"
 #include "../../src/scripting/file_hardware_mmap.h"
+// Forward declaration for C wrapper (defined in BytecodeRegistry.cpp)
+typedef struct {
+    char name[32];
+    uint32_t offset;
+    uint32_t size;
+    uint32_t checksum;
+    uint32_t flash_addr;
+    uint8_t version;
+    bool active;
+} BytecodeEntry;
+
+bool bytecode_registry_find(const char* name, BytecodeEntry* entry);
 #endif
 
 // Helper to get current time in milliseconds
@@ -236,6 +253,97 @@ JSValue js_loadMapped(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
 
     // Note: relocatable_copy must stay allocated - this is a managed leak
     // In production, track these in a list and free when context is destroyed
+
+    return ret;
+#endif
+}
+
+// Load user-uploaded bytecode from js_user partition
+// Takes a script name and loads it using the BytecodeRegistry
+JSValue js_loadUserBytecode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    (void)this_val;
+
+#ifdef EMSCRIPTEN
+    // Not available in WASM builds
+    (void)argc;
+    (void)argv;
+    return JS_ThrowError(ctx, JS_CLASS_ERROR, "loadUserBytecode() not available in browser");
+#else
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx, "loadUserBytecode() requires script name");
+    }
+
+    // Get script name
+    JSCStringBuf buf_str;
+    const char *name = JS_ToCString(ctx, argv[0], &buf_str);
+    if (!name)
+        return JS_EXCEPTION;
+
+    // Find in registry (via C wrapper)
+    BytecodeEntry entry;
+    if (!bytecode_registry_find(name, &entry)) {
+        return JS_ThrowError(ctx, JS_CLASS_ERROR,
+            "bytecode '%s' not found", name);
+    }
+
+    // Memory map from flash (zero-copy)
+    MappedFile* mapped = file_hw_mmap("js_user", entry.offset, entry.size);
+    if (!mapped) {
+        return JS_ThrowError(ctx, JS_CLASS_ERROR,
+            "failed to mmap bytecode '%s'", name);
+    }
+
+    // Verify checksum
+    uint32_t checksum = esp_crc32_le(0, mapped->data, mapped->size);
+
+    ESP_LOGI("js_stdlib", "Load-time CRC32 check: calculated=0x%lx, stored=0x%lx, size=%zu",
+             checksum, entry.checksum, mapped->size);
+
+    if (checksum != entry.checksum) {
+        ESP_LOGE("js_stdlib", "CRC32 mismatch for '%s': calculated 0x%lx != stored 0x%lx",
+                 name, checksum, entry.checksum);
+        file_hw_munmap(mapped);
+        return JS_ThrowError(ctx, JS_CLASS_ERROR,
+            "checksum mismatch for bytecode '%s'", name);
+    }
+
+    // Verify it's valid bytecode
+    if (!JS_IsBytecode(mapped->data, mapped->size)) {
+        file_hw_munmap(mapped);
+        return JS_ThrowError(ctx, JS_CLASS_ERROR,
+            "invalid bytecode format for '%s'", name);
+    }
+
+    // Validate that bytecode is still relocated correctly
+    // This detects firmware updates that change the virtual address space
+    const JSBytecodeHeader* hdr = (const JSBytecodeHeader*)mapped->data;
+
+    uint32_t current_virtual_addr = (uint32_t)mapped->data;
+    uint32_t expected_base_addr = current_virtual_addr + sizeof(JSBytecodeHeader);
+
+    if (hdr->base_addr != expected_base_addr) {
+        ESP_LOGE("js_stdlib", "Bytecode relocation mismatch for '%s'", name);
+        ESP_LOGE("js_stdlib", "Expected base_addr: 0x%lx, got: 0x%lx",
+                 expected_base_addr, (uint32_t)hdr->base_addr);
+        ESP_LOGE("js_stdlib", "Current virtual addr: 0x%lx", current_virtual_addr);
+        ESP_LOGE("js_stdlib", "This can happen after firmware update. Please re-upload bytecode.");
+
+        file_hw_munmap(mapped);
+        return JS_ThrowError(ctx, JS_CLASS_ERROR,
+                           "bytecode relocation invalid for '%s', please re-upload", name);
+    }
+
+    // Bytecode is pre-relocated to this flash address (verified at upload time)
+    // Load directly from flash for true zero-copy execution
+    JSValue ret = JS_LoadBytecode(ctx, mapped->data);
+
+    // Note: mapped file must stay mapped for the lifetime of the loaded code
+    // TODO: Track mapped files for cleanup when context is destroyed
+
+    if (JS_IsException(ret)) {
+        file_hw_munmap(mapped);
+        return ret;
+    }
 
     return ret;
 #endif
