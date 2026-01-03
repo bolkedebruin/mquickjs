@@ -12952,19 +12952,9 @@ static JSValue lookup_rom_translation(JSContext *ctx, uintptr_t bytecode_offset)
     if (!g_rom_translation_table || g_rom_translation_count == 0)
         return JS_UNDEFINED;
 
-#ifdef DEBUG_ROM_TRANSLATION
-    printf("[ROM] Looking up offset 0x%lx in table (%u entries)\n",
-           (unsigned long)bytecode_offset, g_rom_translation_count);
-#endif
-
     // Linear search through ROM translation table
     // (Table is small, typically < 20 entries, so linear search is fine)
     for (int i = 0; i < g_rom_translation_count; i++) {
-#ifdef DEBUG_ROM_TRANSLATION
-        printf("[ROM]   [%d] offset=0x%lx, rom_index=%u\n",
-               i, (unsigned long)g_rom_translation_table[i].bytecode_offset,
-               g_rom_translation_table[i].rom_index);
-#endif
         if (g_rom_translation_table[i].bytecode_offset == bytecode_offset) {
             // Found! Translate ROM atom index → ESP32 ROM pointer
             uint16_t rom_index = g_rom_translation_table[i].rom_index;
@@ -13044,20 +13034,10 @@ static void bc_reloc_value(BCRelocState *s, JSValue *pval)
         // = data_offset (position of current chunk) + offset within chunk
         uint32_t chunk_offset = (uintptr_t)pval - s->current_ptr;
         uint32_t bytecode_offset = s->data_offset + chunk_offset;
-
-#ifdef DEBUG_ROM_TRANSLATION
-        printf("[bc_reloc_value] Checking ptr value: 0x%llx, absolute_offset: 0x%x (data_offset=0x%x + chunk_offset=0x%x)\n",
-               (unsigned long long)val, bytecode_offset, s->data_offset, chunk_offset);
-#endif
-
         JSValue translated = lookup_rom_translation(ctx, bytecode_offset);
 
         if (!JS_IsUndefined(translated)) {
-            /* Found ROM atom - replace WASM pointer with ESP32 ROM pointer */
-#ifdef DEBUG_ROM_TRANSLATION
-            printf("[bc_reloc_value] ROM translation successful! 0x%llx → 0x%llx\n",
-                   (unsigned long long)val, (unsigned long long)translated);
-#endif
+            /* Found ROM atom - replace pointer with ROM pointer */
             *pval = translated;
             return;
         }

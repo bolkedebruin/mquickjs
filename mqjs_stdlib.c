@@ -408,6 +408,7 @@ static const JSPropDef js_global_object[] = {
     JS_CFUNC_DEF("gc", 0, js_gc),
     JS_CFUNC_DEF("load", 1, js_load),
     JS_CFUNC_DEF("loadMapped", 3, js_loadMapped),
+    JS_CFUNC_DEF("loadUserBytecode", 1, js_loadUserBytecode),
     JS_CFUNC_DEF("setTimeout", 2, js_setTimeout),
     JS_CFUNC_DEF("clearTimeout", 1, js_clearTimeout),
 #endif
