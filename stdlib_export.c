@@ -9,6 +9,15 @@
 #include <string.h>
 #include <sys/time.h>
 #include "mquickjs.h"
+#include "mquickjs_ext.h"
+
+// Console output callback for WebSocket REPL
+// When set, console output is sent to both stdout AND the callback (see mquickjs.h)
+static JSConsoleWriteFunc g_console_write_func = NULL;
+
+void JS_SetConsoleWriteFunc(JSConsoleWriteFunc func) {
+    g_console_write_func = func;
+}
 
 #ifndef EMSCRIPTEN
 #include <esp_crc.h>
@@ -160,25 +169,29 @@ JSValue js_date_now(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) 
 }
 
 JSValue js_print(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
-    // Print all arguments to log output (matching mqjs.c implementation)
+    // Print all arguments to both stdout AND WebSocket (if callback is set)
+    // Zero-buffering: each piece streamed immediately to both destinations
     (void)this_val;
 
     for (int i = 0; i < argc; i++) {
         if (i > 0) {
-            putchar(' ');
+            putchar(' ');                                      // Always to stdout
+            if (g_console_write_func) g_console_write_func(" ", 1);  // Also to WebSocket
         }
 
-        // Convert all values to strings and print them
+        // Convert value to string and output
         JSCStringBuf buf;
         size_t len;
         const char *str = JS_ToCStringLen(ctx, &len, argv[i], &buf);
         if (str) {
-            fwrite(str, 1, len, stdout);
+            fwrite(str, 1, len, stdout);                       // Always to stdout
+            if (g_console_write_func) g_console_write_func(str, len);  // Also to WebSocket
         }
     }
 
-    // Add newline
+    // Add newline to both outputs
     putchar('\n');
+    if (g_console_write_func) g_console_write_func("\n", 1);
 
     return JS_UNDEFINED;
 }

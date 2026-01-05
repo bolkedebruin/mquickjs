@@ -14,15 +14,20 @@ Goal: Minimize diff with upstream (bellard/mquickjs) while keeping only necessar
 7. **PRIu32/PRId32 format specifiers** - Better cross-platform compatibility than upstream
 
 ### mquickjs.h
-1. **`#include <stddef.h>`** - Needed for size_t
-2. **`JS_SetConsoleWriteFunc`, `JS_ProcessTimers`** - For REPL/console support
-3. **`JS_GetMemBlockSize`, `JS_GetMemBlockMTag`** declarations
-4. **`JSFunctionBytecodePublic`, `JSValueArrayPublic`** - Public structs for external relocation
+1. **`#include <stddef.h>`** - Needed for size_t (portability fix)
+
+### mquickjs_ext.h (NEW - firmware-specific extensions)
+1. **`JS_SetConsoleWriteFunc`, `JS_ProcessTimers`** - For REPL/console support
+2. **`JS_GetMemBlockSize`, `JS_GetMemBlockMTag`** declarations
+3. **`JSFunctionBytecodePublic`, `JSValueArrayPublic`** - Public structs for external relocation
 
 ## Changes IMPLEMENTED (all complete)
 
 ### emscripten_wrapper.c
 1. ✅ **Handle `use_32bit` parameter** - Same as mqjs.c: when `use_32bit` is true and JSW == 8, use `JS_PrepareBytecode64to32()` instead of `JS_PrepareBytecode()` to generate 32-bit bytecode for ESP32 target
+
+### mquickjs_ext.h
+1. ✅ **Created new header** - Moved firmware-specific extensions out of mquickjs.h to minimize upstream diff
 
 ### mquickjs.h
 1. ✅ **Removed `JS_BYTECODE_VERSION_32_V1`** - Using upstream's version check

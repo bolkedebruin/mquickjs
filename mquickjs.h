@@ -368,13 +368,6 @@ JSValue JS_LoadBytecode(JSContext *ctx, const uint8_t *buf);
 /* debug functions */
 void JS_SetLogFunc(JSContext *ctx, JSWriteFunc *write_func);
 void JS_PrintValue(JSContext *ctx, JSValue val);
-
-/* console output callback for print()/console.log() - output goes to both stdout AND this callback */
-typedef void (*JSConsoleWriteFunc)(const char* buf, size_t len);
-void JS_SetConsoleWriteFunc(JSConsoleWriteFunc func);
-
-/* timer processing - call periodically to execute scheduled timers */
-int64_t JS_ProcessTimers(JSContext *ctx);
 #define JS_DUMP_LONG      (1 << 0) /* display object/array content */
 #define JS_DUMP_NOQUOTE   (1 << 1) /* strings: no quote for identifiers */
 /* for low level dumps: don't dump special properties and use specific
@@ -387,48 +380,5 @@ void JS_DumpValueF(JSContext *ctx, const char *str,
 void JS_DumpValue(JSContext *ctx, const char *str,
                   JSValue val);
 void JS_DumpMemory(JSContext *ctx, JS_BOOL is_long);
-
-/* Bytecode relocation helpers - expose internal memory block information */
-
-/* Get size of a memory block in bytes */
-size_t JS_GetMemBlockSize(const void *ptr);
-
-/* Get memory tag (type) of a block */
-int JS_GetMemBlockMTag(const void *ptr);
-
-/*
- * Memory block structures for relocation (match internal layout)
- * Note: The actual tag values are defined internally in mquickjs_priv.h
- * These structures allow external code to perform relocation
- */
-
-#define JS_MB_HEADER_PUBLIC \
-    JSWord gc_mark: 1; \
-    JSWord mtag: 3
-
-typedef struct JSFunctionBytecodePublic {
-    JS_MB_HEADER_PUBLIC;
-    JSWord has_arguments : 1;
-    JSWord has_local_func_name : 1;
-    JSWord has_column : 1;
-    JSWord arg_count : 16;
-    JSWord dummy: (JSW * 8 - 4 - 3 - 16);
-    JSValue func_name;
-    JSValue byte_code;
-    JSValue cpool;
-    JSValue vars;
-    JSValue ext_vars;
-    uint16_t stack_size;
-    uint16_t ext_vars_len;
-    JSValue filename;
-    JSValue pc2line;
-    uint32_t source_pos;
-} JSFunctionBytecodePublic;
-
-typedef struct JSValueArrayPublic {
-    JS_MB_HEADER_PUBLIC;
-    JSWord size: (JSW * 8 - 4);
-    JSValue arr[];
-} JSValueArrayPublic;
 
 #endif /* MQUICKJS_H */
