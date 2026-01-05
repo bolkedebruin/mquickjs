@@ -11879,12 +11879,6 @@ size_t JS_GetMemBlockSize(const void *ptr)
     return (size_t)get_mblock_size(ptr);
 }
 
-/* Public API: Get memory tag (type) of a block */
-int JS_GetMemBlockMTag(const void *ptr)
-{
-    return ((JSMemBlockHeader *)ptr)->mtag;
-}
-
 /* gc mark pass */
 
 typedef struct {

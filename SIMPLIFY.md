@@ -10,16 +10,14 @@ Goal: Minimize diff with upstream (bellard/mquickjs) while keeping only necessar
 3. **`bc_reloc_value`** - Rewritten to relocate FIRST before dereferencing (needed for streaming from position-independent bytecode where val is offset, not pointer)
 4. **`JS_RelocateBytecode2`** - Refactored to use JS_RelocateHdr/JS_RelocateMtag
 5. **`JS_GetMemBlockSize`** - Public API wrapper for get_mblock_size (used by BytecodeWriter)
-6. **`JS_GetMemBlockMTag`** - Public API for getting memory block tag (used by BytecodeWriter)
-7. **PRIu32/PRId32 format specifiers** - Better cross-platform compatibility than upstream
+6. **PRIu32/PRId32 format specifiers** - Better cross-platform compatibility than upstream
 
 ### mquickjs.h
 1. **`#include <stddef.h>`** - Needed for size_t (portability fix)
 
 ### mquickjs_ext.h (NEW - firmware-specific extensions)
 1. **`JS_SetConsoleWriteFunc`, `JS_ProcessTimers`** - For REPL/console support
-2. **`JS_GetMemBlockSize`, `JS_GetMemBlockMTag`** declarations
-3. **`JSFunctionBytecodePublic`, `JSValueArrayPublic`** - Public structs for external relocation
+2. **`JS_GetMemBlockSize`** - For BytecodeWriter streaming relocation
 
 ## Changes IMPLEMENTED (all complete)
 
