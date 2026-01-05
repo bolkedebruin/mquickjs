@@ -12855,17 +12855,22 @@ BOOL JS_IsBytecode(const uint8_t *buf, size_t buf_len)
     return (buf_len >= sizeof(*hdr) && hdr->magic == JS_BYTECODE_MAGIC);
 }
 
+typedef uint8_t* (*BCRelocReadFunc)(void *opaque, uintptr_t offset, size_t size);
+
 typedef struct {
     JSContext *ctx;
     uintptr_t offset;        // Relocation offset (target - base)
     BOOL update_atoms;
+    BCRelocReadFunc read_func;  // Callback to read data (NULL = use relocated ptr)
+    void *read_opaque;          // Opaque data for read_func
 } BCRelocState;
 
 static void bc_reloc_value(BCRelocState *s, JSValue *pval)
 {
     JSContext *ctx = s->ctx;
     JSString *p;
-    JSValue val, str, val_relocated;
+    JSValue val, str, val_relocated, val_for_compare;
+    uint8_t *read_ptr;
 
     val = *pval;
 
@@ -12873,13 +12878,42 @@ static void bc_reloc_value(BCRelocState *s, JSValue *pval)
         /* unique strings must be unique, so modify the unique string
            value if it already exists in the context */
         if (s->update_atoms) {
-            // Relocate FIRST to get a valid pointer
-            // This allows streaming from position-independent bytecode (base_addr=0)
-            // where val is an offset, not a valid pointer yet
+            // Relocate to get the target pointer
             val_relocated = val + s->offset;
 
-            // NOW we can safely dereference the relocated pointer
-            p = JS_VALUE_TO_PTR(val_relocated);
+            // Determine where to read the data from
+            if (s->read_func) {
+                // Streaming mode: use callback to read from source
+                // Pass the actual pointer address (not the tagged JSValue)
+                uintptr_t ptr_addr = (uintptr_t)JS_VALUE_TO_PTR(val);
+                // First read just the header to check mtag and get string length
+                read_ptr = s->read_func(s->read_opaque, ptr_addr, sizeof(JSString));
+                if (!read_ptr) {
+                    // Can't read data, just relocate without atom lookup
+                    *pval = val_relocated;
+                    return;
+                }
+                p = (JSString *)read_ptr;
+
+                // If it's a unique string, we need the full string data for comparison
+                if (p->mtag == JS_MTAG_STRING && p->is_unique) {
+                    // Read the full string: header + string content
+                    size_t full_size = sizeof(JSString) + p->len + 1;
+                    read_ptr = s->read_func(s->read_opaque, ptr_addr, full_size);
+                    if (!read_ptr) {
+                        // Can't read full string, just relocate without atom lookup
+                        *pval = val_relocated;
+                        return;
+                    }
+                    p = (JSString *)read_ptr;
+                }
+                val_for_compare = JS_VALUE_FROM_PTR(read_ptr);
+            } else {
+                // Non-streaming: read directly from relocated pointer
+                p = JS_VALUE_TO_PTR(val_relocated);
+                val_for_compare = val_relocated;
+            }
+
             if (p->mtag == JS_MTAG_STRING && p->is_unique) {
                 // Unique string - search for existing atom in ROM tables
                 const JSValueArray *arr1;
@@ -12887,8 +12921,8 @@ static void bc_reloc_value(BCRelocState *s, JSValue *pval)
                 str = JS_NULL;
                 for(i = 0; i < ctx->n_rom_atom_tables; i++) {
                     arr1 = ctx->rom_atom_tables[i];
-                    // Search using relocated value, not original offset
-                    str = find_atom(ctx, &a, arr1, arr1->size, val_relocated);
+                    // Search using the readable value for string comparison
+                    str = find_atom(ctx, &a, arr1, arr1->size, val_for_compare);
                     if (!JS_IsNull(str)) {
                         val = str;  // Replace with ROM atom pointer
                         break;
@@ -12977,6 +13011,43 @@ int JS_RelocateBytecode2(JSContext *ctx, JSBytecodeHeader *hdr,
     s->ctx = ctx;
     s->offset = new_base_addr - hdr->base_addr;
     s->update_atoms = update_atoms;
+    s->read_func = NULL;  // No callback - data is at relocated address
+    s->read_opaque = NULL;
+
+    if (JS_RelocateHdr(s, hdr, new_base_addr) != 0)
+        return -1;
+
+    ptr = buf;
+    p_end = buf + buf_len;
+    while (ptr < p_end) {
+        size = get_mblock_size(ptr);
+
+        if (JS_RelocateMtag(s, ptr, size) != 0)
+            return -1;
+
+        ptr += size;
+    }
+    hdr->base_addr = new_base_addr;
+    return 0;
+}
+
+/* Indirect relocation with read callback - for relocating bytecode where
+   source data is at a different location than the target address.
+   The read_func is called to read data from the source location. */
+int JS_RelocateBytecode2Indirect(JSContext *ctx, JSBytecodeHeader *hdr,
+                                  uint8_t *buf, uint32_t buf_len,
+                                  uintptr_t new_base_addr, JS_BOOL update_atoms,
+                                  JSRelocReadFunc read_func, void *read_opaque)
+{
+    uint8_t *ptr, *p_end;
+    int size;
+    BCRelocState ss, *s = &ss;
+
+    s->ctx = ctx;
+    s->offset = new_base_addr - hdr->base_addr;
+    s->update_atoms = update_atoms;
+    s->read_func = read_func;
+    s->read_opaque = read_opaque;
 
     if (JS_RelocateHdr(s, hdr, new_base_addr) != 0)
         return -1;

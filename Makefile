@@ -76,7 +76,7 @@ MQJS_BUILD_FLAGS=-m32
 endif
 
 PROGS=mqjs$(EXE) example$(EXE)
-TEST_PROGS=dtoa_test libm_test 
+TEST_PROGS=dtoa_test libm_test test_relocation
 
 all: $(PROGS)
 
@@ -149,6 +149,13 @@ libm_test: tests/libm_test.o libm.o
 
 rempio2_test: tests/rempio2_test.o libm.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
+
+# Relocation test - requires mqjs_stdlib.h for stdlib atoms
+test_relocation: tests/test_relocation.o mquickjs.o dtoa.o libm.o cutils.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
+
+tests/test_relocation.o: tests/test_relocation.c mqjs_stdlib.h
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 # ESP32 target - generates 32-bit headers required before running idf.py build
 esp32: mqjs_stdlib

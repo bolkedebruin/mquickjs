@@ -337,6 +337,17 @@ void JS_PrepareBytecode(JSContext *ctx,
 int JS_RelocateBytecode2(JSContext *ctx, JSBytecodeHeader *hdr,
                          uint8_t *buf, uint32_t buf_len,
                          uintptr_t new_base_addr, JS_BOOL update_atoms);
+/* Read callback for indirect relocation - returns pointer to data at offset,
+   or NULL if not accessible. The callback should copy the requested bytes
+   to a buffer and return a pointer to that buffer. */
+typedef uint8_t* (*JSRelocReadFunc)(void *opaque, uintptr_t offset, size_t size);
+/* Indirect relocation with read callback - for relocating bytecode where
+   source data is at a different location than the target address.
+   The read_func is called to read data from the source location. */
+int JS_RelocateBytecode2Indirect(JSContext *ctx, JSBytecodeHeader *hdr,
+                                  uint8_t *buf, uint32_t buf_len,
+                                  uintptr_t new_base_addr, JS_BOOL update_atoms,
+                                  JSRelocReadFunc read_func, void *read_opaque);
 #if JSW == 8
 typedef struct {
     uint16_t magic; /* JS_BYTECODE_MAGIC */
