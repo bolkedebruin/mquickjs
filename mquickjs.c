@@ -249,6 +249,7 @@ struct JSContext {
     JSValue empty_props; /* empty prop list, for objects with no properties */
     JSValue global_obj;
     JSValue minus_zero; /* minus zero float64 value */
+    JSValue repl_consts; /* object tracking const names across REPL evals */
     JSValue class_proto[]; /* prototype for each class (class_count
                               element, then class_count elements for
                               class_obj */
@@ -3636,7 +3637,8 @@ JSContext *JS_NewContext2(void *mem_start, size_t mem_size, const JSSTDLibraryDe
 
     ctx->global_obj = JS_NewObject(ctx);
     ctx->minus_zero = js_alloc_float64(ctx, -0.0); /* XXX: use a ROM value instead */
-        
+    ctx->repl_consts = JS_NULL; /* initialized lazily when first const is declared in REPL */
+
     if (!prepare_compilation) {
         stdlib_init(ctx, (JSValueArray *)(stdlib_def->stdlib_table + stdlib_def->global_object_offset));
     }
@@ -7293,7 +7295,13 @@ typedef struct JSParseState {
     
     /* argument + defined local variable count */
     uint16_t local_vars_len;
-    
+
+    /* const definitions (compile-time only, not stored in bytecode) */
+    JSValue const_names;        /* JSValueArray of atom names for consts */
+    JSValue const_cpool_idx;    /* JSValueArray of cpool indices (as JSValue ints) */
+    uint16_t const_count;       /* consts in current function scope */
+    uint16_t const_total;       /* total consts (including outer scopes) */
+
     int eval_ret_idx; /* variable index for the eval return value, -1
                          if no return value */
     JSValue top_break; /* JS_NULL or SP_TO_VALUE(BlockEnv *) */
@@ -8783,6 +8791,102 @@ static int find_var(JSParseState *s, JSValue name)
     return -1;
 }
 
+/* const helper functions - compile-time only */
+static int find_const_def(JSParseState *s, JSValue name)
+{
+    JSValueArray *arr;
+    int i, start_idx;
+    if (s->const_names == JS_NULL)
+        return -1;
+    arr = JS_VALUE_TO_PTR(s->const_names);
+    /* Search only current scope: indices (const_total - const_count) to (const_total - 1) */
+    start_idx = s->const_total - s->const_count;
+    for (i = start_idx; i < s->const_total; i++) {
+        if (arr->arr[i] == name)
+            return i;
+    }
+    return -1;
+}
+
+static int add_const_def(JSParseState *s, JSValue name, int cpool_idx)
+{
+    JSValue new_names, new_idx;
+    JSValueArray *arr;
+
+    /* Grow arrays as needed (like vars) - use const_total for actual size */
+    new_names = js_resize_value_array(s->ctx, s->const_names, s->const_total + 1);
+    if (JS_IsException(new_names)) {
+        js_parse_error(s, "out of memory");
+        return -1;
+    }
+    s->const_names = new_names;
+
+    new_idx = js_resize_value_array(s->ctx, s->const_cpool_idx, s->const_total + 1);
+    if (JS_IsException(new_idx)) {
+        js_parse_error(s, "out of memory");
+        return -1;
+    }
+    s->const_cpool_idx = new_idx;
+
+    /* Store name at const_total index (includes outer scopes) */
+    arr = JS_VALUE_TO_PTR(s->const_names);
+    arr->arr[s->const_total] = name;
+
+    /* Store cpool index as JSValue int */
+    arr = JS_VALUE_TO_PTR(s->const_cpool_idx);
+    arr->arr[s->const_total] = JS_NewInt32(s->ctx, cpool_idx);
+
+    /* Increment both: const_count for current scope, const_total for all scopes */
+    s->const_count++;
+    return s->const_total++;
+}
+
+static void free_const_defs(JSParseState *s)
+{
+    /* Arrays are GC-tracked, just reset to JS_NULL */
+    s->const_names = JS_NULL;
+    s->const_cpool_idx = JS_NULL;
+    s->const_count = 0;
+    s->const_total = 0;
+}
+
+/* Check if name is an outer-scope const (defined in enclosing function) */
+static BOOL is_outer_scope_const(JSParseState *s, JSValue name)
+{
+    JSValueArray *arr;
+    int i, outer_end;
+    if (s->const_names == JS_NULL)
+        return FALSE;
+    arr = JS_VALUE_TO_PTR(s->const_names);
+    /* Outer scope consts are at indices 0 to (const_total - const_count - 1) */
+    outer_end = s->const_total - s->const_count;
+    for (i = 0; i < outer_end; i++) {
+        if (arr->arr[i] == name)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+/* REPL const tracking - tracks const names across separate eval() calls.
+ * This enforces const semantics in REPL mode where each line is a new eval().
+ */
+static BOOL is_repl_const(JSContext *ctx, JSValue name)
+{
+    if (ctx->repl_consts == JS_NULL)
+        return FALSE;
+    return JS_HasProperty(ctx, ctx->repl_consts, name);
+}
+
+static void add_repl_const(JSContext *ctx, JSValue name)
+{
+    /* Create repl_consts object lazily on first const declaration */
+    if (ctx->repl_consts == JS_NULL) {
+        ctx->repl_consts = JS_NewObject(ctx);
+    }
+    /* Set property to TRUE to mark as const (value doesn't matter, just existence) */
+    JS_SetPropertyInternal(ctx, ctx->repl_consts, name, JS_TRUE, FALSE);
+}
+
 static JSValue get_ext_var_name(JSParseState *s, int var_idx)
 {
     JSFunctionBytecode *b;
@@ -8791,6 +8895,19 @@ static JSValue get_ext_var_name(JSParseState *s, int var_idx)
     b = JS_VALUE_TO_PTR(s->cur_func);
     arr = JS_VALUE_TO_PTR(b->ext_vars);
     return arr->arr[2 * var_idx];
+}
+
+static JSValue get_local_var_name(JSParseState *s, int var_idx)
+{
+    JSFunctionBytecode *b;
+    JSValueArray *arr;
+
+    b = JS_VALUE_TO_PTR(s->cur_func);
+    if (b->vars == JS_NULL)
+        return JS_UNDEFINED;
+    arr = JS_VALUE_TO_PTR(b->vars);
+    /* var_idx is relative to arg_count, so actual index is arg_count + var_idx */
+    return arr->arr[b->arg_count + var_idx];
 }
 
 static int find_func_ext_var(JSParseState *s, JSValue func, JSValue name)
@@ -8875,7 +8992,8 @@ static void get_lvalue(JSParseState *s, int *popcode,
 {
     int opcode, var_idx;
     JSSourcePos source_pos;
-    
+    JSValue name;
+
     /* we check the last opcode to get the lvalue type */
     opcode = get_prev_opcode(s);
     switch(opcode) {
@@ -8885,6 +9003,11 @@ static void get_lvalue(JSParseState *s, int *popcode,
     case OP_get_loc3:
         var_idx = opcode - OP_get_loc0;
         opcode = OP_get_loc;
+        /* Check if this is a const */
+        name = get_local_var_name(s, var_idx);
+        if (find_const_def(s, name) >= 0 ||
+            (s->is_eval && is_repl_const(s->ctx, name)))
+            js_parse_error(s, "assignment to constant variable");
         break;
     case OP_get_arg0:
     case OP_get_arg1:
@@ -8896,17 +9019,38 @@ static void get_lvalue(JSParseState *s, int *popcode,
     case OP_get_loc8:
         var_idx = get_u8(get_byte_code(s) + s->last_opcode_pos + 1);
         opcode = OP_get_loc;
+        /* Check if this is a const */
+        name = get_local_var_name(s, var_idx);
+        if (find_const_def(s, name) >= 0 ||
+            (s->is_eval && is_repl_const(s->ctx, name)))
+            js_parse_error(s, "assignment to constant variable");
         break;
     case OP_get_loc:
+        var_idx = get_u16(get_byte_code(s) + s->last_opcode_pos + 1);
+        /* Check if this is a const */
+        name = get_local_var_name(s, var_idx);
+        if (find_const_def(s, name) >= 0 ||
+            (s->is_eval && is_repl_const(s->ctx, name)))
+            js_parse_error(s, "assignment to constant variable");
+        break;
     case OP_get_arg:
-    case OP_get_var_ref:
     case OP_get_field:
         var_idx = get_u16(get_byte_code(s) + s->last_opcode_pos + 1);
+        break;
+    case OP_get_var_ref:
+        var_idx = get_u16(get_byte_code(s) + s->last_opcode_pos + 1);
+        /* Check if this is a const (global/external) */
+        name = get_ext_var_name(s, var_idx);
+        if (find_const_def(s, name) >= 0 ||
+            (s->is_eval && is_repl_const(s->ctx, name)))
+            js_parse_error(s, "assignment to constant variable");
         break;
     case OP_get_array_el:
     case OP_get_length:
         var_idx = -1;
         break;
+    case OP_push_const:
+        js_parse_error(s, "assignment to constant variable");
     default:
         js_parse_error(s, "invalid lvalue");
     }
@@ -9390,12 +9534,30 @@ static int js_parse_postfix_expr(JSParseState *s, int state, int parse_flags)
             JSFunctionBytecode *b;
             JSValue name;
             int var_idx, arg_count, opcode;
+            int const_idx;
 
             b = JS_VALUE_TO_PTR(s->cur_func);
             arg_count = b->arg_count;
-            
+
             name = s->token.value;
-            
+
+            /* In script mode, check const_defs first - emit push_const from cpool */
+            const_idx = find_const_def(s, name);
+            if (const_idx >= 0 && !s->is_eval) {
+                /* Script mode: const lives in cpool only, emit push_const */
+                JSValueArray *cpool_arr = (JSValueArray *)JS_VALUE_TO_PTR(s->const_cpool_idx);
+                int cpool_idx = (int)(cpool_arr->arr[const_idx] >> 1);  /* extract short int */
+                if (cpool_idx >= 0) {
+                    /* Literal const: read from cpool */
+                    emit_op(s, OP_push_const);
+                    emit_u16(s, cpool_idx);
+                    next_token(s);
+                    break;
+                }
+                /* cpool_idx == -1: expression-based const, fall through to variable lookup */
+            }
+
+            /* Normal variable lookup (also used for consts in REPL mode) */
             var_idx = find_var(s, name);
             if (var_idx >= 0) {
                 if (var_idx < arg_count) {
@@ -9405,6 +9567,11 @@ static int js_parse_postfix_expr(JSParseState *s, int state, int parse_flags)
                     var_idx -= arg_count;
                 }
             } else {
+                /* Check for outer-scope const access (not allowed) */
+                if (is_outer_scope_const(s, name)) {
+                    js_parse_error(s, "const from outer function cannot be captured in closure");
+                    return JS_EXCEPTION;
+                }
                 var_idx = find_ext_var(s, name);
                 if (var_idx < 0) {
                     var_idx = add_ext_var(s, name, (JS_VARREF_KIND_GLOBAL << 16) | 0);
@@ -10280,13 +10447,16 @@ static void js_parse_var(JSParseState *s, BOOL in_accepted)
     JSVarRefKindEnum var_kind;
     int var_idx;
     JSSourcePos ident_source_pos;
-    
+
     for(;;) {
         ident_source_pos = s->token.source_pos;
         if (s->token.val != TOK_IDENT)
             js_parse_error(s, "variable name expected");
         if (s->token.value == js_get_atom(s->ctx, JS_ATOM_arguments))
             js_parse_error(s, "invalid variable name");
+        /* Check for REPL const redeclaration */
+        if (s->is_eval && is_repl_const(s->ctx, s->token.value))
+            js_parse_error(s, "const redeclaration");
         var_idx = define_var(s, &var_kind, s->token.value);
         next_token(s);
         if (s->token.val == '=') {
@@ -10294,6 +10464,126 @@ static void js_parse_var(JSParseState *s, BOOL in_accepted)
             js_parse_assign_expr2(s, in_accepted ? 0 : PF_NO_IN);
             put_var(s, var_kind, var_idx, ident_source_pos);
         }
+        if (s->token.val != ',')
+            break;
+        next_token(s);
+    }
+}
+
+/* Parse const declaration
+ * - In eval/REPL mode: stores as variable for persistence across evaluations
+ * - In script mode: optimized to store only in cpool (flash), zero RAM usage
+ */
+static void js_parse_const(JSParseState *s)
+{
+    JSValue name;
+
+    for(;;) {
+        if (s->token.val != TOK_IDENT)
+            js_parse_error(s, "identifier expected");
+
+        name = s->token.value;
+
+        /* Check for redeclaration */
+        if (find_const_def(s, name) >= 0)
+            js_parse_error(s, "const redeclaration");
+        if (find_var(s, name) >= 0)
+            js_parse_error(s, "identifier already declared");
+        /* Check for REPL const redeclaration from previous eval() calls */
+        if (s->is_eval && is_repl_const(s->ctx, name))
+            js_parse_error(s, "const redeclaration");
+        /* Check for var redeclaration (var creates global properties in eval mode) */
+        if (s->is_eval && JS_HasProperty(s->ctx, s->ctx->global_obj, name))
+            js_parse_error(s, "identifier already declared");
+
+        if (s->is_eval) {
+            /* REPL/eval mode: store as variable for persistence */
+            JSVarRefKindEnum var_kind;
+            int var_idx;
+            JSSourcePos ident_source_pos = s->token.source_pos;
+
+            var_idx = define_var(s, &var_kind, name);
+            add_const_def(s, name, 0);  /* track for assignment blocking */
+            add_repl_const(s->ctx, name); /* track for cross-eval blocking */
+
+            next_token(s);
+
+            if (s->token.val != '=')
+                js_parse_error(s, "const requires initializer");
+
+            next_token(s);
+            js_parse_assign_expr2(s, 0);
+            put_var(s, var_kind, var_idx, ident_source_pos);
+        } else {
+            /* Script mode: optimized - try to store only in cpool (flash) */
+            JSVarRefKindEnum var_kind;
+            int var_idx;
+            int opcode, cpool_idx;
+            uint8_t *byte_code;
+            JSSourcePos ident_source_pos = s->token.source_pos;
+
+            /* Pre-define variable (may remove later if literal) */
+            var_idx = define_var(s, &var_kind, name);
+
+            next_token(s);
+
+            if (s->token.val != '=')
+                js_parse_error(s, "const requires initializer");
+
+            next_token(s);
+            js_parse_assign_expr2(s, 0);
+
+            /* Try to extract constant value for cpool storage */
+            opcode = get_prev_opcode(s);
+            byte_code = get_byte_code(s);
+
+            if (opcode == OP_push_const) {
+                /* Literal from cpool: store in cpool only (zero RAM) */
+                cpool_idx = get_u16(byte_code + s->last_opcode_pos + 1);
+                remove_last_op(s);
+                add_const_def(s, name, cpool_idx);
+            } else if (opcode >= OP_push_minus1 && opcode <= OP_push_7) {
+                /* Small integer: add to cpool, no variable (zero RAM) */
+                int val = opcode - OP_push_0;
+                cpool_idx = cpool_add(s, JS_NewShortInt(val));
+                remove_last_op(s);
+                add_const_def(s, name, cpool_idx);
+            } else if (opcode == OP_push_i8) {
+                int8_t val = (int8_t)byte_code[s->last_opcode_pos + 1];
+                cpool_idx = cpool_add(s, JS_NewShortInt(val));
+                remove_last_op(s);
+                add_const_def(s, name, cpool_idx);
+            } else if (opcode == OP_push_i16) {
+                int16_t val = (int16_t)get_u16(byte_code + s->last_opcode_pos + 1);
+                cpool_idx = cpool_add(s, JS_NewShortInt(val));
+                remove_last_op(s);
+                add_const_def(s, name, cpool_idx);
+            } else if (opcode == OP_push_value) {
+                JSValue val;
+                memcpy(&val, byte_code + s->last_opcode_pos + 1, sizeof(JSValue));
+                cpool_idx = cpool_add(s, val);
+                remove_last_op(s);
+                add_const_def(s, name, cpool_idx);
+            } else if (opcode == OP_push_false || opcode == OP_push_true) {
+                JSValue val = (opcode == OP_push_true) ? JS_TRUE : JS_FALSE;
+                cpool_idx = cpool_add(s, val);
+                remove_last_op(s);
+                add_const_def(s, name, cpool_idx);
+            } else if (opcode == OP_undefined) {
+                cpool_idx = cpool_add(s, JS_UNDEFINED);
+                remove_last_op(s);
+                add_const_def(s, name, cpool_idx);
+            } else if (opcode == OP_null) {
+                cpool_idx = cpool_add(s, JS_NULL);
+                remove_last_op(s);
+                add_const_def(s, name, cpool_idx);
+            } else {
+                /* Non-literal expression: must use variable (uses RAM) */
+                add_const_def(s, name, -1);  /* -1 marker: look up as variable */
+                put_var(s, var_kind, var_idx, ident_source_pos);
+            }
+        }
+
         if (s->token.val != ',')
             break;
         next_token(s);
@@ -10405,6 +10695,11 @@ static int js_parse_statement(JSParseState *s, int state, int dummy_param)
     case TOK_VAR:
         next_token(s);
         js_parse_var(s, TRUE);
+        js_parse_expect_semi(s);
+        break;
+    case TOK_CONST:
+        next_token(s);
+        js_parse_const(s);
         js_parse_expect_semi(s);
         break;
     case TOK_IF:
@@ -11436,6 +11731,9 @@ static void reset_parse_state(JSParseState *s, uint32_t input_pos,
     
     s->local_vars_len = 0;
 
+    /* const tracking - reset for each function but keep allocated arrays */
+    s->const_count = 0;
+
     s->eval_ret_idx = -1;
 }
 
@@ -11697,6 +11995,8 @@ static JSValue JS_Parse2(JSContext *ctx, JSValue source_str,
     ctx->parse_state = s;
     s->source_str = JS_NULL;
     s->filename_str = JS_NULL;
+    s->const_names = JS_NULL;
+    s->const_cpool_idx = JS_NULL;
     s->has_column = ((eval_flags & JS_EVAL_STRIP_COL) == 0);
 
     if (JS_IsPtr(source_str)) {
@@ -11719,6 +12019,7 @@ static JSValue JS_Parse2(JSContext *ctx, JSValue source_str,
         int line_num, col_num;
         JSValue val;
 
+        free_const_defs(s);
         ctx->parse_state = NULL;
         ctx->top_gc_ref = saved_top_gc_ref;
         ctx->sp = saved_sp;
@@ -11763,6 +12064,7 @@ static JSValue JS_Parse2(JSContext *ctx, JSValue source_str,
         
         JS_POP_VALUE(ctx, top_func);
     }
+    free_const_defs(s);
     ctx->parse_state = NULL;
     return top_func;
 }
