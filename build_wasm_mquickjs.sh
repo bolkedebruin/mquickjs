@@ -59,6 +59,9 @@ echo ""
 echo "Step 2: Compiling to WebAssembly..."
 
 # Source files needed for WASM compilation
+# Note: freebutton_stubs_wasm.c provides stub implementations for all FreeButton APIs
+# The actual implementations (freebutton_led.c, freebutton_sensor.c, freebutton_displayitem.c etc.)
+# are NOT included as they require hardware APIs not available in WASM
 SOURCES="
     mquickjs.c
     cutils.c
@@ -90,6 +93,7 @@ emcc \
     -s ALLOW_MEMORY_GROWTH=1 \
     -s INITIAL_MEMORY=16MB \
     -s MAXIMUM_MEMORY=64MB \
+    -s STACK_SIZE=1MB \
     -s MODULARIZE=1 \
     -s EXPORT_NAME='createMQuickJSModule' \
     -s ENVIRONMENT='web,worker' \
@@ -100,7 +104,8 @@ emcc \
     -DCONFIG_FREEBUTTON_LED \
     -DCONFIG_FREEBUTTON_BUTTON \
     -DCONFIG_FREEBUTTON_SENSOR \
-    -DCONFIG_FREEBUTTON_MQTT
+    -DCONFIG_FREEBUTTON_MQTT \
+    -DCONFIG_FREEBUTTON_DISPLAY
 
 echo ""
 echo "✓ Build complete!"

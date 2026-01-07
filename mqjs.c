@@ -114,7 +114,7 @@ static JSValue js_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
     uint8_t *buf;
     int buf_len;
     JSValue ret;
-    
+
     filename = JS_ToCString(ctx, argv[0], &buf_str);
     if (!filename)
         return JS_EXCEPTION;
@@ -123,6 +123,18 @@ static JSValue js_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
     ret = JS_Eval(ctx, (const char *)buf, buf_len, filename, 0);
     free(buf);
     return ret;
+}
+
+/* stub: loadMapped is for ESP32 memory-mapped file loading */
+static JSValue js_loadMapped(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    return JS_ThrowInternalError(ctx, "loadMapped not available on this platform");
+}
+
+/* stub: loadUserBytecode is for ESP32 user bytecode loading */
+static JSValue js_loadUserBytecode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    return JS_ThrowInternalError(ctx, "loadUserBytecode not available on this platform");
 }
 
 /* timers */

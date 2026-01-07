@@ -129,4 +129,48 @@ JSValue js_freebutton_mqtt_onDisconnect(JSContext *ctx, JSValue *this_val, int a
     return JS_UNDEFINED;
 }
 
-#endif // EMSCRIPTEN
+/*
+ * Display API Stubs
+ */
+
+JSValue js_freebutton_display_create(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    return JS_NewInt32(ctx, 0);
+}
+
+JSValue js_freebutton_display_remove(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    return JS_FALSE;
+}
+
+JSValue js_freebutton_display_count(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    return JS_NewInt32(ctx, 0);
+}
+
+JSValue js_freebutton_display_get(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    return JS_NULL;
+}
+
+JSValue js_freebutton_display_getAll(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    return JS_NewArray(ctx, 0);
+}
+
+JSValue js_freebutton_display_setLabel(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    return JS_FALSE;
+}
+
+JSValue js_freebutton_display_setValue(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    return JS_FALSE;
+}
+
+JSValue js_freebutton_display_setUnit(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    return JS_FALSE;
+}
+
+JSValue js_freebutton_display_setPosition(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    return JS_FALSE;
+}
+
+JSValue js_freebutton_display_setPage(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    return JS_FALSE;
+}
+
+#endif /* EMSCRIPTEN */

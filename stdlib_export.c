@@ -407,5 +407,17 @@ JSValue js_freebutton_led_on(JSContext *ctx, JSValue *this_val, int argc, JSValu
 JSValue js_freebutton_led_off(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_freebutton_led_setColor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 
+// Forward declarations for display functions (defined in freebutton_displayitem.c)
+JSValue js_freebutton_display_create(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_freebutton_display_remove(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_freebutton_display_count(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_freebutton_display_get(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_freebutton_display_getAll(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_freebutton_display_setLabel(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_freebutton_display_setValue(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_freebutton_display_setUnit(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_freebutton_display_setPosition(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_freebutton_display_setPage(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+
 // Include the generated FreeButton stdlib (with LED bindings)
 #include "freebutton_stdlib.h"

@@ -128,14 +128,51 @@ static const JSClassDef js_freebutton_mqtt_obj =
     JS_OBJECT_DEF("MQTT", js_freebutton_mqtt);
 
 /*
+ * FreeButton Display API
+ *
+ * JavaScript bindings for creating and manipulating display items:
+ *   display.create(x, y, width, boxType, fontSize, alignment, label, unit, round, page)
+ *       - Create a new display item, returns ID
+ *   display.remove(id)           - Remove a display item
+ *   display.count()              - Get number of display items
+ *   display.get(id)              - Get display item info
+ *   display.getAll()             - Get array of all display item IDs
+ *   display.setLabel(id, label)  - Set display item label
+ *   display.setValue(id, value)  - Set display item value
+ *   display.setUnit(id, unit)    - Set display item unit
+ *   display.setPosition(id, x, y) - Set display item position
+ *   display.setPage(id, page)    - Set display item page
+ *
+ * The actual function implementations are in freebutton_displayitem.c which is
+ * compiled separately as part of the ESP32 firmware build.
+ */
+static const JSPropDef js_freebutton_display[] = {
+    JS_CFUNC_DEF("create", 10, js_freebutton_display_create),
+    JS_CFUNC_DEF("remove", 1, js_freebutton_display_remove),
+    JS_CFUNC_DEF("count", 0, js_freebutton_display_count),
+    JS_CFUNC_DEF("get", 1, js_freebutton_display_get),
+    JS_CFUNC_DEF("getAll", 0, js_freebutton_display_getAll),
+    JS_CFUNC_DEF("setLabel", 2, js_freebutton_display_setLabel),
+    JS_CFUNC_DEF("setValue", 2, js_freebutton_display_setValue),
+    JS_CFUNC_DEF("setUnit", 2, js_freebutton_display_setUnit),
+    JS_CFUNC_DEF("setPosition", 3, js_freebutton_display_setPosition),
+    JS_CFUNC_DEF("setPage", 2, js_freebutton_display_setPage),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_freebutton_display_obj =
+    JS_OBJECT_DEF("Display", js_freebutton_display);
+
+/*
  * Include the full standard library
  *
  * We need to define CONFIG_FREEBUTTON_LED, CONFIG_FREEBUTTON_BUTTON,
- * CONFIG_FREEBUTTON_SENSOR, and CONFIG_FREEBUTTON_MQTT before including
- * mqjs_stdlib.c so that the objects are added to the global namespace.
+ * CONFIG_FREEBUTTON_SENSOR, CONFIG_FREEBUTTON_MQTT, and CONFIG_FREEBUTTON_DISPLAY
+ * before including mqjs_stdlib.c so that the objects are added to the global namespace.
  */
 #define CONFIG_FREEBUTTON_LED
 #define CONFIG_FREEBUTTON_BUTTON
 #define CONFIG_FREEBUTTON_SENSOR
 #define CONFIG_FREEBUTTON_MQTT
+#define CONFIG_FREEBUTTON_DISPLAY
 #include "mqjs_stdlib.c"

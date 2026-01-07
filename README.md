@@ -82,7 +82,7 @@ of JavaScript, so it still works as usual in other JavaScript
 engines. Here are the main points:
 
 - Only **strict mode** constructs are allowed, hence no `with` keyword
-  and global variables must be declared with the `var` keyword.
+  and global variables must be declared with the `var` or `const` keyword.
 
 - Arrays cannot have holes. Writing an element after the end is not
   allowed:
@@ -179,7 +179,22 @@ Always prefer using `for of` instead which is supported with arrays:
 - Date: only `Date.now()` is supported.
 
 ES5 extensions:
-  
+
+- `const` declarations are supported with zero RAM overhead. Constant
+  values are stored in the bytecode constant pool (cpool) which
+  typically resides in flash/ROM. **Limitation:** consts cannot be
+  captured by closures. Accessing a const from an outer function scope
+  will produce a compile-time error:
+```js
+    const x = 42;        // OK: stored in cpool
+    const y = x + 1;     // OK: expression evaluated at compile time
+    function inner() {
+        const local = 5; // OK: inner function has its own consts
+        return x;        // Error: outer const cannot be captured
+    }
+```
+  Use `var` instead if you need closure capture.
+
 - `for of` is supported but iterates only over arrays. No custom
    iterator is supported (yet).
 

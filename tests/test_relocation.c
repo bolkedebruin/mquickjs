@@ -670,6 +670,135 @@ static int test_restricted_buffer_read(void) {
     }
 }
 
+static int test_const_keyword(void) {
+    printf("  test_const_keyword: ");
+
+    const size_t heap_size = 128 * 1024;
+    uint8_t *heap = malloc(heap_size);
+    if (!heap) {
+        printf("FAIL (malloc)\n");
+        return -1;
+    }
+
+    JSContext *ctx = JS_NewContext(heap, heap_size, &js_stdlib);
+    if (!ctx) {
+        printf("FAIL (JS_NewContext)\n");
+        free(heap);
+        return -1;
+    }
+
+    // Test -1: sanity check - simple var works
+    g_print_call_count = 0;
+    const char *source_sanity = "var y = 42; console.log(y);";
+    JSValue val_sanity = JS_Parse(ctx, source_sanity, strlen(source_sanity), "<sanity>", 0);
+    if (JS_IsException(val_sanity)) {
+        printf("FAIL (JS_Parse var sanity)\n");
+        JS_FreeContext(ctx);
+        free(heap);
+        return -1;
+    }
+    JSValue result_sanity = JS_Run(ctx, val_sanity);
+    if (JS_IsException(result_sanity)) {
+        printf("FAIL (JS_Run var sanity)\n");
+        JS_FreeContext(ctx);
+        free(heap);
+        return -1;
+    }
+    if (g_print_call_count != 1 || strcmp(g_last_print, "42") != 0) {
+        printf("FAIL (var sanity: expected '42', got '%s', count=%d)\n", g_last_print, g_print_call_count);
+        JS_FreeContext(ctx);
+        free(heap);
+        return -1;
+    }
+
+    // Test 0: just parse const (no execution)
+    const char *source0 = "const a = 1;";
+    JSValue val0 = JS_Parse(ctx, source0, strlen(source0), "<const0>", 0);
+    if (JS_IsException(val0)) {
+        printf("FAIL (JS_Parse simple const)\n");
+        JS_FreeContext(ctx);
+        free(heap);
+        return -1;
+    }
+
+    // Test 1: const declaration and access (using small int 1)
+    g_print_call_count = 0;
+    const char *source1 = "const x = 1; console.log(x);";
+    JSValue val1 = JS_Parse(ctx, source1, strlen(source1), "<const1>", 0);
+    if (JS_IsException(val1)) {
+        printf("FAIL (JS_Parse const declaration)\n");
+        JS_FreeContext(ctx);
+        free(heap);
+        return -1;
+    }
+    JSValue result1 = JS_Run(ctx, val1);
+    if (JS_IsException(result1)) {
+        printf("FAIL (JS_Run const declaration)\n");
+        JS_FreeContext(ctx);
+        free(heap);
+        return -1;
+    }
+    if (g_print_call_count != 1 || strcmp(g_last_print, "1") != 0) {
+        printf("FAIL (expected '1', got '%s', count=%d)\n", g_last_print, g_print_call_count);
+        JS_FreeContext(ctx);
+        free(heap);
+        return -1;
+    }
+
+    // Test 2: const with string
+    g_print_call_count = 0;
+    const char *source2 = "const s = 'hello'; console.log(s);";
+    JSValue val2 = JS_Parse(ctx, source2, strlen(source2), "<const2>", 0);
+    if (JS_IsException(val2)) {
+        printf("FAIL (JS_Parse const string)\n");
+        JS_FreeContext(ctx);
+        free(heap);
+        return -1;
+    }
+    JSValue result2 = JS_Run(ctx, val2);
+    if (JS_IsException(result2)) {
+        printf("FAIL (JS_Run const string)\n");
+        JS_FreeContext(ctx);
+        free(heap);
+        return -1;
+    }
+    if (g_print_call_count != 1 || strcmp(g_last_print, "hello") != 0) {
+        printf("FAIL (expected 'hello', got '%s')\n", g_last_print);
+        JS_FreeContext(ctx);
+        free(heap);
+        return -1;
+    }
+
+    // Test 3: const in function scope
+    g_print_call_count = 0;
+    const char *source3 = "function f() { const y = 100; return y; } console.log(f());";
+    JSValue val3 = JS_Parse(ctx, source3, strlen(source3), "<const3>", 0);
+    if (JS_IsException(val3)) {
+        printf("FAIL (JS_Parse const in function)\n");
+        JS_FreeContext(ctx);
+        free(heap);
+        return -1;
+    }
+    JSValue result3 = JS_Run(ctx, val3);
+    if (JS_IsException(result3)) {
+        printf("FAIL (JS_Run const in function)\n");
+        JS_FreeContext(ctx);
+        free(heap);
+        return -1;
+    }
+    if (g_print_call_count != 1 || strcmp(g_last_print, "100") != 0) {
+        printf("FAIL (expected '100', got '%s')\n", g_last_print);
+        JS_FreeContext(ctx);
+        free(heap);
+        return -1;
+    }
+
+    JS_FreeContext(ctx);
+    free(heap);
+    printf("PASS\n");
+    return 0;
+}
+
 int main(int argc, char **argv) {
     int failures = 0;
 
@@ -680,6 +809,7 @@ int main(int argc, char **argv) {
     if (test_position_independent() != 0) failures++;
     if (test_atom_replacement() != 0) failures++;
     if (test_restricted_buffer_read() != 0) failures++;
+    if (test_const_keyword() != 0) failures++;
 
     printf("\n%d test(s) failed\n", failures);
     return failures;

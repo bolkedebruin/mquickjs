@@ -343,6 +343,56 @@ function test_labels2()
     assert(i == 1)
 }
 
+function test_const()
+{
+    /* basic const with numbers */
+    const a = 42;
+    assert(a, 42, "const number");
+
+    const b = 3.14;
+    assert(b, 3.14, "const float");
+
+    /* const with string */
+    const s = "hello";
+    assert(s, "hello", "const string");
+
+    /* const with expression */
+    const c = 10 + 20;
+    assert(c, 30, "const expression");
+
+    /* const with object - mutation allowed, rebinding not */
+    const obj = {x: 1, y: 2};
+    assert(obj.x, 1, "const object access");
+    obj.x = 10;  /* mutation is allowed */
+    assert(obj.x, 10, "const object mutation");
+    obj.z = 3;   /* adding property is allowed */
+    assert(obj.z, 3, "const object add property");
+
+    /* const with array - mutation allowed */
+    const arr = [1, 2, 3];
+    assert(arr[0], 1, "const array access");
+    arr[0] = 10;  /* mutation is allowed */
+    assert(arr[0], 10, "const array mutation");
+    arr[3] = 4;   /* adding element is allowed */
+    assert(arr[3], 4, "const array add element");
+
+    /* multiple const declarations */
+    const x = 1, y = 2, z = 3;
+    assert(x, 1, "multiple const x");
+    assert(y, 2, "multiple const y");
+    assert(z, 3, "multiple const z");
+
+    /* NOTE: const cannot be captured by closures (use var for that)
+       This is by design for zero-RAM optimization on ESP32 */
+
+    /* const shadowing - inner const works fine */
+    function shadow() {
+        const val = 10;
+        return val;
+    }
+    assert(shadow(), 10, "const in inner function");
+}
+
 test_op1();
 test_cvt();
 test_eq();
@@ -353,3 +403,4 @@ test_arguments();
 test_to_primitive();
 test_labels();
 test_labels2();
+test_const();

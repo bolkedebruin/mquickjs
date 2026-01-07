@@ -176,6 +176,16 @@ STUB_FUNC(js_freebutton_mqtt_subscribe);
 STUB_FUNC(js_freebutton_mqtt_unsubscribe);
 STUB_FUNC(js_freebutton_mqtt_onConnect);
 STUB_FUNC(js_freebutton_mqtt_onDisconnect);
+STUB_FUNC(js_freebutton_display_create);
+STUB_FUNC(js_freebutton_display_remove);
+STUB_FUNC(js_freebutton_display_count);
+STUB_FUNC(js_freebutton_display_get);
+STUB_FUNC(js_freebutton_display_getAll);
+STUB_FUNC(js_freebutton_display_setLabel);
+STUB_FUNC(js_freebutton_display_setValue);
+STUB_FUNC(js_freebutton_display_setUnit);
+STUB_FUNC(js_freebutton_display_setPosition);
+STUB_FUNC(js_freebutton_display_setPage);
 
 // Stub global functions
 STUB_FUNC(js_print);
@@ -422,7 +432,8 @@ public:
 
                 // Skip these - they're not global functions but classes/objects
                 if (name == "led" || name == "button" || name == "sensor" ||
-                    name == "mqtt" || name == "console" || name == "performance") {
+                    name == "mqtt" || name == "console" || name == "performance" ||
+                    name == "display") {
                     continue;
                 }
 
@@ -465,11 +476,13 @@ public:
         extern const JSPropDef js_freebutton_button[];
         extern const JSPropDef js_freebutton_sensor[];
         extern const JSPropDef js_freebutton_mqtt[];
+        extern const JSPropDef js_freebutton_display[];
 
         apis["led"] = emitAPI("led", js_freebutton_led);
         apis["button"] = emitAPI("button", js_freebutton_button);
         apis["sensor"] = emitAPI("sensor", js_freebutton_sensor);
         apis["mqtt"] = emitAPI("mqtt", js_freebutton_mqtt);
+        apis["display"] = emitAPI("display", js_freebutton_display);
 
         // MQuickJS stdlib APIs
         extern const JSPropDef js_console[];
@@ -578,6 +591,7 @@ int main(int argc, char** argv) {
     walker.parseDocumentation("button", "freebutton_button.c");
     walker.parseDocumentation("sensor", "freebutton_sensor.c");
     walker.parseDocumentation("mqtt", "freebutton_mqtt.c");
+    walker.parseDocumentation("display", "freebutton_displayitem.c");
 
     // Generate JSON output (walking structures directly)
     walker.generateJSON(cout);

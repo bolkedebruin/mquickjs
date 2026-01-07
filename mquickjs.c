@@ -8872,15 +8872,22 @@ static BOOL is_outer_scope_const(JSParseState *s, JSValue name)
  */
 static BOOL is_repl_const(JSContext *ctx, JSValue name)
 {
-    if (ctx->repl_consts == JS_NULL)
+    /* Skip in compilation mode (WASM compiler) - unique_strings_len > 0 means prepare_compilation */
+    if (ctx->unique_strings_len > 0)
+        return FALSE;
+    /* Check for uninitialized (0 from memset) or explicitly NULL */
+    if (ctx->repl_consts == JS_NULL || ctx->repl_consts == 0)
         return FALSE;
     return JS_HasProperty(ctx, ctx->repl_consts, name);
 }
 
 static void add_repl_const(JSContext *ctx, JSValue name)
 {
+    /* Skip in compilation mode (WASM compiler) */
+    if (ctx->unique_strings_len > 0)
+        return;
     /* Create repl_consts object lazily on first const declaration */
-    if (ctx->repl_consts == JS_NULL) {
+    if (ctx->repl_consts == JS_NULL || ctx->repl_consts == 0) {
         ctx->repl_consts = JS_NewObject(ctx);
     }
     /* Set property to TRUE to mark as const (value doesn't matter, just existence) */
@@ -9404,6 +9411,7 @@ static JSValue js_parse_pop_val(JSParseState *s)
     PARSE_POP_INT(s, var1);
 
 static JSParseFunc *parse_func_table[];
+static size_t parse_func_table_size;
 
 static void js_parse_call(JSParseState *s, ParseExprFuncEnum func_idx,
                           int param)
@@ -9411,11 +9419,19 @@ static void js_parse_call(JSParseState *s, ParseExprFuncEnum func_idx,
     JSContext *ctx = s->ctx;
     int ret, state;
     JSValue *stack_top;
+    JSParseFunc *func;
 
     stack_top = ctx->sp;
     state = PARSE_STATE_INIT;
     for(;;) {
-        ret = parse_func_table[func_idx](s, state, param);
+        /* Sanity check: func_idx must be in valid range */
+        if (func_idx >= parse_func_table_size) {
+            js_parse_error(s, "FATAL: func_idx=%d out of range, sp=%p, stack_top=%p, heap_free=%p",
+                          func_idx, (void*)ctx->sp, (void*)stack_top, (void*)ctx->heap_free);
+            return;
+        }
+        func = parse_func_table[func_idx];
+        ret = func(s, state, param);
         state = ret & 0xff;
         if (state == PARSE_STATE_RET) {
             /* the function terminated: go back to the calling
@@ -11192,6 +11208,8 @@ static JSParseFunc *parse_func_table[] = {
     re_parse_disjunction,
 };
 
+static size_t parse_func_table_size = sizeof(parse_func_table) / sizeof(parse_func_table[0]);
+
 static void js_parse_source_element(JSParseState *s)
 {
     if (s->token.val == TOK_FUNCTION) {
@@ -11985,8 +12003,7 @@ static JSValue JS_Parse2(JSContext *ctx, JSValue source_str,
     JSValue top_func, *saved_sp;
     JSGCRef top_func_ref, *saved_top_gc_ref;
     uint8_t str_buf[5];
-    
-    /* XXX: start gc at the start of parsing ? */
+
     /* XXX: if the parse state is too large, move it to JSContext */
     s = &parse_state;
     memset(s, 0, sizeof(*s));
@@ -12081,7 +12098,7 @@ JSValue JS_Run(JSContext *ctx, JSValue val)
     JSFunctionBytecode *b;
     JSGCRef val_ref;
     int err;
-    
+
     if (!JS_IsPtr(val))
         goto fail;
     b = JS_VALUE_TO_PTR(val);
