@@ -126,10 +126,14 @@ test: mqjs example
 	./mqjs tests/test_language.js
 	./mqjs tests/test_loop.js
 	./mqjs tests/test_builtin.js
+	./mqjs tests/test_rom_pragma.js
 # test bytecode generation and loading
 	./mqjs -o test_builtin.bin tests/test_builtin.js
 #	@sha256sum -c test_builtin.sha256
 	./mqjs -b test_builtin.bin
+# test @rom bytecode roundtrip
+	./mqjs -o test_rom_pragma.bin tests/test_rom_pragma.js
+	./mqjs -b test_rom_pragma.bin
 	./example tests/test_rect.js
 
 microbench: mqjs
@@ -167,6 +171,6 @@ esp32: mqjs_stdlib
 	@echo "  idf.py build"
 
 clean:
-	rm -f *.o *.d *~ tests/*.o tests/*.d tests/*~ test_builtin.bin mqjs_stdlib mqjs_stdlib.h mquickjs_build_atoms mquickjs_atom.h mqjs_example example_stdlib example_stdlib.h $(PROGS) $(TEST_PROGS)
+	rm -f *.o *.d *~ tests/*.o tests/*.d tests/*~ test_builtin.bin test_rom_pragma.bin mqjs_stdlib mqjs_stdlib.h mquickjs_build_atoms mquickjs_atom.h mqjs_example example_stdlib example_stdlib.h $(PROGS) $(TEST_PROGS)
 
 -include $(wildcard *.d)

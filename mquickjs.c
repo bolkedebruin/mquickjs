@@ -6626,6 +6626,48 @@ JSValue JS_Call(JSContext *ctx, int call_flags)
                 goto exception;
             sp -= 2;
             BREAK;
+        CASE(OP_load_rom_object):
+            {
+                JSValueArray *cpool = JS_VALUE_TO_PTR(b->cpool);
+                JSValue rom_props = cpool->arr[get_u16(pc)];
+                pc += 2;
+                SAVE();
+                val = JS_NewObject(ctx);
+                RESTORE();
+                if (JS_IsException(val))
+                    goto exception;
+                {
+                    JSObject *p = JS_VALUE_TO_PTR(val);
+                    p->props = rom_props;
+                    p->extensible = 0;
+                }
+                *--sp = val;
+            }
+            BREAK;
+        CASE(OP_freeze_object):
+            {
+                if (JS_IsObject(ctx, sp[0])) {
+                    JSObject *p = JS_VALUE_TO_PTR(sp[0]);
+                    p->extensible = 0;
+                    {
+                        JSValueArray *arr = JS_VALUE_TO_PTR(p->props);
+                        if (!JS_IS_ROM_PTR(ctx, arr)) {
+                            int prop_count = JS_VALUE_GET_INT(arr->arr[0]);
+                            int hash_mask = JS_VALUE_GET_INT(arr->arr[1]);
+                            int i, j;
+                            for (i = 0, j = 0; j < prop_count; i++) {
+                                JSProperty *pr = (JSProperty *)&arr->arr[2 + hash_mask + 1 + 3 * i];
+                                if (pr->key != JS_UNINITIALIZED) {
+                                    pr->writable = 0;
+                                    pr->configurable = 0;
+                                    j++;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            BREAK;
         default:
             {
                 JSByteArray *byte_code = JS_VALUE_TO_PTR(b->byte_code);
@@ -7294,6 +7336,7 @@ typedef struct JSParseState {
     BOOL has_column : 8; /* column debug info is present */
     /* TRUE if the expression result has been dropped (see PF_DROP) */
     BOOL dropped_result : 8;
+    BOOL has_rom_pragma : 8; /* TRUE if // @rom pragma was seen */
     JSValue source_str; /* source string or JS_NULL */
     JSValue filename_str; /* 'filename' converted to string */
     /* zero terminated source buffer. Automatically updated by the GC
@@ -8119,6 +8162,13 @@ static void next_token(JSParseState *s)
         } else if (p[1] == '/') {
             /* line comment */
             p += 2;
+            {
+                const uint8_t *q = p;
+                while (*q == ' ' || *q == '\t') q++;
+                if (q[0] == '@' && q[1] == 'r' && q[2] == 'o' && q[3] == 'm' &&
+                    (q[4] == '\0' || q[4] == '\n' || q[4] == ' ' || q[4] == '\t'))
+                    s->has_rom_pragma = TRUE;
+            }
             for(;;) {
                 if (*p == '\0' || *p == '\n')
                     break;
@@ -10510,6 +10560,402 @@ static void js_parse_var(JSParseState *s, BOOL in_accepted)
     }
 }
 
+/* Build a ROM property table as a JSValueArray.
+   Layout: [prop_count, hash_mask(0), bucket_head, key0, val0, flags0, key1, val1, flags1, ...]
+   hash_mask=0 means single bucket — O(n) lookup, fine for small config objects.
+   All properties have writable=0, configurable=0, prop_type=JS_PROP_NORMAL. */
+static JSValue build_rom_prop_table(JSParseState *s, JSValue keys_val, JSValue vals_val, int prop_count)
+{
+    JSContext *ctx = s->ctx;
+    JSValueArray *keys_arr, *vals_arr, *arr;
+    int size, i;
+    JSProperty *pr;
+    JSGCRef keys_val_ref, vals_val_ref;
+
+    size = 3 + 3 * prop_count; /* prop_count + hash_mask + 1 bucket + 3*props */
+
+    JS_PUSH_VALUE(ctx, keys_val);
+    JS_PUSH_VALUE(ctx, vals_val);
+    arr = js_alloc_value_array(ctx, 0, size);
+    JS_POP_VALUE(ctx, vals_val);
+    JS_POP_VALUE(ctx, keys_val);
+    if (!arr)
+        js_parse_error_mem(s);
+
+    keys_arr = JS_VALUE_TO_PTR(keys_val);
+    vals_arr = JS_VALUE_TO_PTR(vals_val);
+
+    arr->arr[0] = JS_NewShortInt(prop_count);
+    arr->arr[1] = JS_NewShortInt(0); /* hash_mask = 0 */
+
+    /* Chain all properties through the single bucket.
+       hash_next stores (slot_offset << 1) where slot_offset is
+       index into the arr[] from the start of the array.
+       0 = end of chain. */
+    for (i = 0; i < prop_count; i++) {
+        int slot_base = 3 + 3 * i;
+        pr = (JSProperty *)&arr->arr[slot_base];
+        pr->key = keys_arr->arr[i];
+        pr->value = vals_arr->arr[i];
+        /* hash_next: link to next property or 0 for end.
+           Each property is at offset (3 + 3*i) from arr start.
+           hash_next = (offset << 1) so bit 0 is 0 (not a pointer). */
+        if (i + 1 < prop_count) {
+            pr->hash_next = (3 + 3 * (i + 1)) << 1;
+        } else {
+            pr->hash_next = 0; /* end of chain */
+        }
+        pr->writable = 0;
+        pr->configurable = 0;
+        pr->prop_type = JS_PROP_NORMAL;
+    }
+    /* bucket head: points to first property */
+    if (prop_count > 0)
+        arr->arr[2] = (3) << 1; /* offset of first property */
+    else
+        arr->arr[2] = 0; /* empty */
+
+    return JS_VALUE_FROM_PTR(arr);
+}
+
+/* Emit push bytecode for a primitive literal value in @rom context.
+   Returns the JSValue for the flat property table. */
+static JSValue js_parse_rom_primitive_value(JSParseState *s)
+{
+    JSValue val;
+    switch (s->token.val) {
+    case TOK_NUMBER:
+        {
+            double d = s->token.u.d;
+            val = JS_NewFloat64(s->ctx, d);
+            if (JS_IsException(val))
+                js_parse_error_mem(s);
+            next_token(s);
+            return val;
+        }
+    case TOK_STRING:
+        val = s->token.value;
+        next_token(s);
+        return val;
+    case TOK_TRUE:
+        next_token(s);
+        return JS_TRUE;
+    case TOK_FALSE:
+        next_token(s);
+        return JS_FALSE;
+    case TOK_NULL:
+        next_token(s);
+        return JS_NULL;
+    case '-':
+        next_token(s);
+        if (s->token.val != TOK_NUMBER)
+            js_parse_error(s, "@rom: expected number after '-'");
+        {
+            double d = -s->token.u.d;
+            val = JS_NewFloat64(s->ctx, d);
+            if (JS_IsException(val))
+                js_parse_error_mem(s);
+            next_token(s);
+            return val;
+        }
+    default:
+        js_parse_error(s, "@rom: values must be compile-time constants");
+        return JS_UNDEFINED; /* unreachable */
+    }
+}
+
+/* Emit push bytecodes for a primitive value onto the stack */
+static void js_emit_rom_primitive(JSParseState *s)
+{
+    switch (s->token.val) {
+    case TOK_NUMBER:
+        js_emit_push_number(s, s->token.u.d);
+        next_token(s);
+        break;
+    case TOK_STRING:
+        js_emit_push_const(s, s->token.value);
+        next_token(s);
+        break;
+    case TOK_TRUE:
+        emit_op(s, OP_push_true);
+        next_token(s);
+        break;
+    case TOK_FALSE:
+        emit_op(s, OP_push_false);
+        next_token(s);
+        break;
+    case TOK_NULL:
+        emit_op(s, OP_null);
+        next_token(s);
+        break;
+    case '-':
+        next_token(s);
+        if (s->token.val != TOK_NUMBER)
+            js_parse_error(s, "@rom: expected number after '-'");
+        js_emit_push_number(s, -s->token.u.d);
+        next_token(s);
+        break;
+    default:
+        js_parse_error(s, "@rom: values must be compile-time constants");
+    }
+}
+
+/* Check if the current token is a primitive literal value (for @rom) */
+static BOOL is_rom_primitive(JSParseState *s)
+{
+    return s->token.val == TOK_NUMBER ||
+           s->token.val == TOK_STRING ||
+           s->token.val == TOK_TRUE ||
+           s->token.val == TOK_FALSE ||
+           s->token.val == TOK_NULL ||
+           s->token.val == '-';
+}
+
+/* Parse array literal in @rom context: [val, val, ...]
+   All elements must be primitives.
+   Emits: push each element + OP_array_from N + OP_freeze_object */
+static void js_parse_rom_array(JSParseState *s)
+{
+    int count = 0;
+
+    next_token(s); /* skip '[' */
+    while (s->token.val != ']') {
+        if (!is_rom_primitive(s))
+            js_parse_error(s, "@rom: array elements must be compile-time constants");
+        js_emit_rom_primitive(s);
+        count++;
+        if (s->token.val == ',')
+            next_token(s);
+        else if (s->token.val != ']')
+            js_parse_error(s, "@rom: expected ',' or ']' in array");
+    }
+    next_token(s); /* skip ']' */
+    emit_op(s, OP_array_from);
+    emit_u16(s, count);
+    emit_op(s, OP_freeze_object);
+}
+
+/* Parse object literal in @rom context with speculative emission.
+   Speculatively emits standard OP_object+define_field bytecodes while
+   collecting flat property data. If all properties are primitive, rolls
+   back and emits OP_load_rom_object instead. If any are nested, keeps
+   the speculative bytecodes and appends OP_freeze_object. */
+static void js_parse_rom_object(JSParseState *s)
+{
+    JSContext *ctx = s->ctx;
+    JSGCRef keys_ref, vals_ref;
+    JSValue keys, vals;
+    int saved_byte_code_len, saved_last_opcode_pos;
+    int saved_last_pc2line_pos;
+    JSSourcePos saved_last_pc2line_source_pos;
+    uint32_t saved_pc2line_bit_len;
+    JSSourcePos saved_pc2line_source_pos;
+    int prop_count, count_pos, flat_count;
+    BOOL has_nested;
+
+    /* Save bytecode state for potential rollback */
+    saved_byte_code_len = s->byte_code_len;
+    saved_last_opcode_pos = s->last_opcode_pos;
+    saved_last_pc2line_pos = s->last_pc2line_pos;
+    saved_last_pc2line_source_pos = s->last_pc2line_source_pos;
+    saved_pc2line_bit_len = s->pc2line_bit_len;
+    saved_pc2line_source_pos = s->pc2line_source_pos;
+
+    /* Allocate GC-safe temp arrays for flat property keys/values */
+    keys = JS_VALUE_FROM_PTR(js_alloc_value_array(ctx, 0, 16));
+    if (JS_IsException(keys))
+        js_parse_error_mem(s);
+    JS_PUSH_VALUE(ctx, keys);
+    vals = JS_VALUE_FROM_PTR(js_alloc_value_array(ctx, 0, 16));
+    JS_POP_VALUE(ctx, keys);
+    if (JS_IsException(vals))
+        js_parse_error_mem(s);
+    JS_PUSH_VALUE(ctx, keys);
+    JS_PUSH_VALUE(ctx, vals);
+
+    /* Emit speculative: OP_object + u16(0) */
+    next_token(s); /* skip '{' */
+    emit_op(s, OP_object);
+    count_pos = s->byte_code_len;
+    emit_u16(s, 0);
+
+    has_nested = FALSE;
+    prop_count = 0;
+    flat_count = 0;
+
+    while (s->token.val != '}') {
+        JSValue name;
+        int prop_idx;
+
+        /* Parse property name */
+        if (s->token.val != TOK_IDENT && s->token.val != TOK_STRING &&
+            s->token.val < TOK_FIRST_KEYWORD && s->token.val != TOK_NUMBER)
+            js_parse_error(s, "@rom: invalid property name");
+
+        if (s->token.val == TOK_NUMBER) {
+            name = JS_NewFloat64(ctx, s->token.u.d);
+            if (JS_IsException(name))
+                js_parse_error_mem(s);
+        } else {
+            name = s->token.value;
+        }
+        name = JS_ToPropertyKey(ctx, name);
+        if (JS_IsException(name))
+            js_parse_error_mem(s);
+
+        /* Re-read arrays after potential GC */
+        JS_POP_VALUE(ctx, vals);
+        JS_POP_VALUE(ctx, keys);
+
+        /* Add to cpool for speculative define_field */
+        JS_PUSH_VALUE(ctx, keys);
+        JS_PUSH_VALUE(ctx, vals);
+        prop_idx = cpool_add(s, name);
+        JS_POP_VALUE(ctx, vals);
+        JS_POP_VALUE(ctx, keys);
+
+        /* Re-read name from cpool since cpool_add may have moved things */
+        {
+            JSFunctionBytecode *b = JS_VALUE_TO_PTR(s->cur_func);
+            JSValueArray *cpool_arr = JS_VALUE_TO_PTR(b->cpool);
+            name = cpool_arr->arr[prop_idx];
+        }
+
+        JS_PUSH_VALUE(ctx, keys);
+        JS_PUSH_VALUE(ctx, vals);
+
+        next_token(s); /* skip property name */
+        js_parse_expect1(s, ':');
+        next_token(s);
+
+        /* Parse value */
+        if (s->token.val == '{') {
+            /* Nested object */
+            has_nested = TRUE;
+            js_parse_rom_object(s);
+        } else if (s->token.val == '[') {
+            /* Array value */
+            has_nested = TRUE;
+            js_parse_rom_array(s);
+        } else if (is_rom_primitive(s)) {
+            /* Primitive value — emit push and save for flat table */
+            JSValue prim_val;
+            JSValueArray *k_arr, *v_arr;
+
+            /* Get the value before emitting (which may call next_token) */
+            prim_val = js_parse_rom_primitive_value(s);
+
+            /* Re-read arrays after potential GC from next_token */
+            JS_POP_VALUE(ctx, vals);
+            JS_POP_VALUE(ctx, keys);
+
+            /* Grow arrays if needed */
+            if (flat_count >= ((JSValueArray *)JS_VALUE_TO_PTR(keys))->size) {
+                int new_size = flat_count + 16;
+                JSValue new_keys, new_vals;
+                JS_PUSH_VALUE(ctx, keys);
+                JS_PUSH_VALUE(ctx, vals);
+                new_keys = js_resize_value_array(ctx, keys, new_size);
+                JS_POP_VALUE(ctx, vals);
+                JS_POP_VALUE(ctx, keys);
+                if (JS_IsException(new_keys))
+                    js_parse_error_mem(s);
+                keys = new_keys;
+                JS_PUSH_VALUE(ctx, keys);
+                JS_PUSH_VALUE(ctx, vals);
+                new_vals = js_resize_value_array(ctx, vals, new_size);
+                JS_POP_VALUE(ctx, vals);
+                JS_POP_VALUE(ctx, keys);
+                if (JS_IsException(new_vals))
+                    js_parse_error_mem(s);
+                vals = new_vals;
+            }
+
+            k_arr = JS_VALUE_TO_PTR(keys);
+            v_arr = JS_VALUE_TO_PTR(vals);
+            k_arr->arr[flat_count] = name;
+            v_arr->arr[flat_count] = prim_val;
+            flat_count++;
+
+            /* Now emit the push bytecode for the speculative path */
+            JS_PUSH_VALUE(ctx, keys);
+            JS_PUSH_VALUE(ctx, vals);
+
+            /* We already consumed the token via js_parse_rom_primitive_value,
+               so we need to re-emit the push bytecode. Use the saved value. */
+            if (JS_IsInt(prim_val)) {
+                emit_push_short_int(s, JS_VALUE_GET_INT(prim_val));
+            } else {
+                js_emit_push_const(s, prim_val);
+            }
+            goto after_value;
+        } else {
+            js_parse_error(s, "@rom: values must be compile-time constants");
+        }
+
+        /* Emit OP_define_field for this property */
+        emit_op(s, OP_define_field);
+        emit_u16(s, prop_idx);
+        prop_count++;
+
+        if (s->token.val == ',')
+            next_token(s);
+        else if (s->token.val != '}')
+            js_parse_error(s, "@rom: expected ',' or '}' in object");
+        continue;
+
+    after_value:
+        /* Emit OP_define_field for this property */
+        emit_op(s, OP_define_field);
+        emit_u16(s, prop_idx);
+        prop_count++;
+
+        if (s->token.val == ',')
+            next_token(s);
+        else if (s->token.val != '}')
+            js_parse_error(s, "@rom: expected ',' or '}' in object");
+    }
+
+    next_token(s); /* skip '}' */
+
+    if (!has_nested && flat_count == prop_count) {
+        /* All properties are primitive — roll back speculative bytecodes */
+        s->byte_code_len = saved_byte_code_len;
+        s->last_opcode_pos = saved_last_opcode_pos;
+        s->last_pc2line_pos = saved_last_pc2line_pos;
+        s->last_pc2line_source_pos = saved_last_pc2line_source_pos;
+        s->pc2line_bit_len = saved_pc2line_bit_len;
+        s->pc2line_source_pos = saved_pc2line_source_pos;
+        /* Note: we keep cpool entries (they don't hurt), but the ROM table
+           will reference them anyway */
+
+        /* Build ROM property table */
+        JS_POP_VALUE(ctx, vals);
+        JS_POP_VALUE(ctx, keys);
+        {
+            JSValue rom_table;
+            int cpool_idx;
+            JS_PUSH_VALUE(ctx, keys);
+            JS_PUSH_VALUE(ctx, vals);
+            rom_table = build_rom_prop_table(s, keys, vals, flat_count);
+            JS_POP_VALUE(ctx, vals);
+            JS_POP_VALUE(ctx, keys);
+
+            cpool_idx = cpool_add(s, rom_table);
+            emit_op(s, OP_load_rom_object);
+            emit_u16(s, cpool_idx);
+        }
+    } else {
+        /* Has nested values — keep speculative bytecodes, update count, freeze */
+        uint8_t *byte_code = get_byte_code(s);
+        put_u16(byte_code + count_pos, prop_count);
+        emit_op(s, OP_freeze_object);
+
+        JS_POP_VALUE(ctx, vals);
+        JS_POP_VALUE(ctx, keys);
+    }
+}
+
 /* Parse const declaration
  * - In eval/REPL mode: stores as variable for persistence across evaluations
  * - In script mode: optimized to store only in cpool (flash), zero RAM usage
@@ -10552,6 +10998,16 @@ static void js_parse_const(JSParseState *s)
                 js_parse_error(s, "const requires initializer");
 
             next_token(s);
+
+            if (s->has_rom_pragma) {
+                s->has_rom_pragma = FALSE;
+                if (s->token.val != '{')
+                    js_parse_error(s, "@rom requires object literal initializer");
+                js_parse_rom_object(s);
+                put_var(s, var_kind, var_idx, ident_source_pos);
+                goto const_done;
+            }
+
             js_parse_assign_expr2(s, 0);
             put_var(s, var_kind, var_idx, ident_source_pos);
         } else {
@@ -10571,6 +11027,19 @@ static void js_parse_const(JSParseState *s)
                 js_parse_error(s, "const requires initializer");
 
             next_token(s);
+
+            if (s->has_rom_pragma) {
+                s->has_rom_pragma = FALSE;
+                if (s->token.val != '{')
+                    js_parse_error(s, "@rom requires object literal initializer");
+                js_parse_rom_object(s);
+                /* @rom objects are stored as variables (they push an object
+                   on the stack at runtime, can't be a simple cpool value) */
+                add_const_def(s, name, -1);
+                put_var(s, var_kind, var_idx, ident_source_pos);
+                goto const_done;
+            }
+
             js_parse_assign_expr2(s, 0);
 
             /* Try to extract constant value for cpool storage */
@@ -10624,6 +11093,7 @@ static void js_parse_const(JSParseState *s)
             }
         }
 
+    const_done:
         if (s->token.val != ',')
             break;
         next_token(s);
@@ -10698,6 +11168,11 @@ static int js_parse_statement(JSParseState *s, int state, int dummy_param)
         label_name = JS_NULL;
     }
     
+    if (s->has_rom_pragma && s->token.val != TOK_CONST && s->token.val != TOK_VAR) {
+        s->has_rom_pragma = FALSE;
+        js_parse_error(s, "@rom must precede a const declaration");
+    }
+
     switch(s->token.val) {
     case '{':
         PARSE_CALL(s, 0, js_parse_block, 0);
@@ -10733,6 +11208,10 @@ static int js_parse_statement(JSParseState *s, int state, int dummy_param)
         }
         break;
     case TOK_VAR:
+        if (s->has_rom_pragma) {
+            s->has_rom_pragma = FALSE;
+            js_parse_error(s, "@rom requires const declaration");
+        }
         next_token(s);
         js_parse_var(s, TRUE);
         js_parse_expect_semi(s);
@@ -11759,6 +12238,7 @@ static void reset_parse_state(JSParseState *s, uint32_t input_pos,
 {
     s->buf_pos = input_pos;
     s->token.val = ' ';
+    s->has_rom_pragma = FALSE;
 
     s->cur_func = cur_func;
     s->byte_code = JS_NULL;

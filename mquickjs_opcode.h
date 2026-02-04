@@ -166,8 +166,10 @@ DEF(     strict_neq, 1, 2, 1, none)
 DEF(            and, 1, 2, 1, none)
 DEF(            xor, 1, 2, 1, none)
 DEF(             or, 1, 2, 1, none)
+DEF(load_rom_object, 3, 0, 1, const16) /* cpool_idx -> frozen obj with ROM props */
+DEF(  freeze_object, 1, 1, 1, none)    /* obj -> obj (freeze in place) */
 /* must be the last non short and non temporary opcode */
-DEF(            nop, 1, 0, 0, none) 
+DEF(            nop, 1, 0, 0, none)
 
 DEF(    push_minus1, 1, 0, 1, none_int)
 DEF(         push_0, 1, 0, 1, none_int)
