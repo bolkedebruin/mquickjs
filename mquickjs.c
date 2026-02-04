@@ -274,8 +274,13 @@ typedef struct {
        JS_PROP_VARREF: JSVarRef */
     JSValue value;
     /* XXX: when JSW = 8, could use 32 bits for hash_next (faster) */
-    uint32_t hash_next : 30;  /* low bit at zero */
-    uint32_t prop_type : 2;
+    uint32_t hash_next    : 28;  /* low bit at zero. Reduced from 30 to
+                                    make room for writable/configurable.
+                                    Max ~134M property slots, sufficient
+                                    for all practical use. */
+    uint32_t writable     : 1;   /* default 1; 0 = read-only property */
+    uint32_t configurable : 1;   /* default 1; 0 = cannot delete/reconfigure */
+    uint32_t prop_type    : 2;
 } JSProperty;
 
 typedef struct {
@@ -320,7 +325,8 @@ typedef struct {
 
 struct JSObject {
     JS_MB_HEADER;
-    JSWord class_id: 8;
+    JSWord class_id: 7;    /* reduced from 8 to make room for extensible */
+    JSWord extensible: 1;  /* default 1; 0 = cannot add new properties */
     JSWord extra_size: JS_MB_PAD(JS_MTAG_BITS + 8);  /* object additional size, in JSValue */
 
     JSValue proto; /* JSObject or JS_NULL */
@@ -2350,6 +2356,7 @@ static JSObject *JS_NewObjectProtoClass1(JSContext *ctx, JSValue proto,
     if (!p)
         return NULL;
     p->class_id = class_id;
+    p->extensible = 1;
     p->extra_size = extra_size;
     p->proto = proto;
     p->props = ctx->empty_props;
@@ -2815,7 +2822,8 @@ static int js_update_props(JSContext *ctx, JSValue obj)
     hash_mask = JS_VALUE_GET_INT(arr1->arr[1]);
     /* no deleted properties in ROM */
     assert(arr1->size == 2 + (hash_mask + 1) + 3 * prop_count);
-    /* convert JS_PROP_SPECIAL properties ("prototype" and "constructor") */
+    /* convert JS_PROP_SPECIAL properties ("prototype" and "constructor")
+       and set writable/configurable for RAM properties */
     for(i = 0; i < prop_count; i++) {
         idx = 2 + (hash_mask + 1) + 3 * i;
         pr = (JSProperty *)&arr1->arr[idx];
@@ -2823,6 +2831,8 @@ static int js_update_props(JSContext *ctx, JSValue obj)
             pr->value = get_special_prop(ctx, pr->value);
             pr->prop_type = JS_PROP_NORMAL;
         }
+        pr->writable = 1;
+        pr->configurable = 1;
     }
     
     p = JS_VALUE_TO_PTR(obj);
@@ -2856,6 +2866,10 @@ static JSProperty *js_create_property(JSContext *ctx, JSValue obj,
     JSGCRef obj_ref, prop_ref;
 
     p = JS_VALUE_TO_PTR(obj);
+    if (!p->extensible) {
+        JS_ThrowTypeError(ctx, "object is not extensible");
+        return NULL;
+    }
     arr = JS_VALUE_TO_PTR(p->props);
 
     //    JS_DumpValue(ctx, "create", prop);
@@ -2919,6 +2933,8 @@ static JSProperty *js_create_property(JSContext *ctx, JSValue obj,
     pr->key = prop;
     pr->value = JS_UNDEFINED;
     pr->prop_type = JS_PROP_NORMAL;
+    pr->writable = 1;
+    pr->configurable = 1;
     h = hash_prop(prop) & hash_mask;
     pr->hash_next = arr->arr[2 + h];
     arr->arr[2 + h] = JS_NewShortInt(first_free);
@@ -3260,6 +3276,8 @@ static JSValue JS_SetPropertyInternal(JSContext *ctx, JSValue this_obj,
     pr = find_own_property(ctx, p, prop);
     if (pr) {
         if (likely(pr->prop_type == JS_PROP_NORMAL)) {
+            if (unlikely(!pr->writable))
+                return JS_ThrowTypeError(ctx, "cannot assign to read only property");
             if (unlikely(JS_IS_ROM_PTR(ctx, pr)))
                 goto convert_to_ram;
             pr->value = val;
@@ -3403,6 +3421,8 @@ static JSValue JS_DeleteProperty(JSContext *ctx, JSValue this_obj,
     while (idx != 0) {
         pr = (JSProperty *)(arr->arr + idx);
         if (pr->key == prop) {
+            if (!pr->configurable)
+                return JS_ThrowTypeError(ctx, "cannot delete property");
             if (JS_IS_ROM_PTR(ctx, arr)) {
                 JSGCRef this_obj_ref;
                 int ret;
@@ -5959,6 +5979,8 @@ JSValue JS_Call(JSContext *ctx, int call_flags)
                         goto put_field_slow;
                     /* XXX: slow */
                     if (unlikely(JS_IS_ROM_PTR(ctx, pr)))
+                        goto put_field_slow;
+                    if (unlikely(!pr->writable))
                         goto put_field_slow;
                     pr->value = sp[0];
                     sp += 2;
@@ -14435,6 +14457,157 @@ JSValue js_object_toString(JSContext *ctx, JSValue *this_val,
     }
     js_snprintf(buf, sizeof(buf), "[object %s]", str);
     return JS_NewString(ctx, buf);
+}
+
+JSValue js_object_freeze(JSContext *ctx, JSValue *this_val,
+                         int argc, JSValue *argv)
+{
+    JSObject *p;
+    JSValueArray *arr;
+    JSProperty *pr;
+    int prop_count, hash_mask, i, j;
+
+    if (!JS_IsObject(ctx, argv[0]))
+        return argv[0]; /* non-objects are returned unchanged (ES6) */
+
+    p = JS_VALUE_TO_PTR(argv[0]);
+    p->extensible = 0;
+
+    arr = JS_VALUE_TO_PTR(p->props);
+    /* ROM props already have writable=0, configurable=0 (bits are
+       zero in the ROM table), so no copy to RAM is needed */
+    if (JS_IS_ROM_PTR(ctx, arr))
+        return argv[0];
+
+    prop_count = JS_VALUE_GET_INT(arr->arr[0]);
+    hash_mask = JS_VALUE_GET_INT(arr->arr[1]);
+
+    for (i = 0, j = 0; j < prop_count; i++) {
+        pr = (JSProperty *)&arr->arr[2 + hash_mask + 1 + 3 * i];
+        if (pr->key != JS_UNINITIALIZED) {
+            pr->writable = 0;
+            pr->configurable = 0;
+            j++;
+        }
+    }
+    return argv[0];
+}
+
+JSValue js_object_seal(JSContext *ctx, JSValue *this_val,
+                       int argc, JSValue *argv)
+{
+    JSObject *p;
+    JSValueArray *arr;
+    JSProperty *pr;
+    int prop_count, hash_mask, i, j;
+
+    if (!JS_IsObject(ctx, argv[0]))
+        return argv[0];
+
+    p = JS_VALUE_TO_PTR(argv[0]);
+    p->extensible = 0;
+
+    arr = JS_VALUE_TO_PTR(p->props);
+    /* ROM props already have configurable=0 */
+    if (JS_IS_ROM_PTR(ctx, arr))
+        return argv[0];
+
+    prop_count = JS_VALUE_GET_INT(arr->arr[0]);
+    hash_mask = JS_VALUE_GET_INT(arr->arr[1]);
+
+    for (i = 0, j = 0; j < prop_count; i++) {
+        pr = (JSProperty *)&arr->arr[2 + hash_mask + 1 + 3 * i];
+        if (pr->key != JS_UNINITIALIZED) {
+            pr->configurable = 0;
+            j++;
+        }
+    }
+    return argv[0];
+}
+
+JSValue js_object_preventExtensions(JSContext *ctx, JSValue *this_val,
+                                    int argc, JSValue *argv)
+{
+    JSObject *p;
+
+    if (!JS_IsObject(ctx, argv[0]))
+        return argv[0];
+
+    p = JS_VALUE_TO_PTR(argv[0]);
+    p->extensible = 0;
+    return argv[0];
+}
+
+JSValue js_object_isFrozen(JSContext *ctx, JSValue *this_val,
+                           int argc, JSValue *argv)
+{
+    JSObject *p;
+    JSValueArray *arr;
+    JSProperty *pr;
+    int prop_count, hash_mask, i, j;
+
+    if (!JS_IsObject(ctx, argv[0]))
+        return JS_TRUE; /* non-objects are trivially frozen */
+
+    p = JS_VALUE_TO_PTR(argv[0]);
+    if (p->extensible)
+        return JS_FALSE;
+
+    arr = JS_VALUE_TO_PTR(p->props);
+    prop_count = JS_VALUE_GET_INT(arr->arr[0]);
+    hash_mask = JS_VALUE_GET_INT(arr->arr[1]);
+
+    for (i = 0, j = 0; j < prop_count; i++) {
+        pr = (JSProperty *)&arr->arr[2 + hash_mask + 1 + 3 * i];
+        if (pr->key != JS_UNINITIALIZED) {
+            if (pr->writable || pr->configurable)
+                return JS_FALSE;
+            j++;
+        }
+    }
+    return JS_TRUE;
+}
+
+JSValue js_object_isSealed(JSContext *ctx, JSValue *this_val,
+                           int argc, JSValue *argv)
+{
+    JSObject *p;
+    JSValueArray *arr;
+    JSProperty *pr;
+    int prop_count, hash_mask, i, j;
+
+    if (!JS_IsObject(ctx, argv[0]))
+        return JS_TRUE; /* non-objects are trivially sealed */
+
+    p = JS_VALUE_TO_PTR(argv[0]);
+    if (p->extensible)
+        return JS_FALSE;
+
+    arr = JS_VALUE_TO_PTR(p->props);
+    prop_count = JS_VALUE_GET_INT(arr->arr[0]);
+    hash_mask = JS_VALUE_GET_INT(arr->arr[1]);
+
+    for (i = 0, j = 0; j < prop_count; i++) {
+        pr = (JSProperty *)&arr->arr[2 + hash_mask + 1 + 3 * i];
+        if (pr->key != JS_UNINITIALIZED) {
+            if (pr->configurable)
+                return JS_FALSE;
+            j++;
+        }
+    }
+    return JS_TRUE;
+}
+
+JSValue js_object_isExtensible(JSContext *ctx, JSValue *this_val,
+                               int argc, JSValue *argv)
+{
+    JSObject *p;
+
+    if (!JS_IsObject(ctx, argv[0]))
+        return JS_FALSE; /* non-objects are not extensible */
+
+    p = JS_VALUE_TO_PTR(argv[0]);
+    return JS_NewBool(p->extensible);
 }
 
 /**********************************************************************/

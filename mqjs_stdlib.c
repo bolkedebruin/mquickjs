@@ -43,6 +43,12 @@ static const JSPropDef js_object[] = {
     JS_CFUNC_DEF("setPrototypeOf", 2, js_object_setPrototypeOf),
     JS_CFUNC_DEF("create", 2, js_object_create),
     JS_CFUNC_DEF("keys", 1, js_object_keys),
+    JS_CFUNC_DEF("freeze", 1, js_object_freeze),
+    JS_CFUNC_DEF("seal", 1, js_object_seal),
+    JS_CFUNC_DEF("preventExtensions", 1, js_object_preventExtensions),
+    JS_CFUNC_DEF("isFrozen", 1, js_object_isFrozen),
+    JS_CFUNC_DEF("isSealed", 1, js_object_isSealed),
+    JS_CFUNC_DEF("isExtensible", 1, js_object_isExtensible),
     JS_PROP_END,
 };
 

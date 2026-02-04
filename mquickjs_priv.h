@@ -152,6 +152,18 @@ JSValue js_object_hasOwnProperty(JSContext *ctx, JSValue *this_val,
                                  int argc, JSValue *argv);
 JSValue js_object_toString(JSContext *ctx, JSValue *this_val,
                            int argc, JSValue *argv);
+JSValue js_object_freeze(JSContext *ctx, JSValue *this_val,
+                         int argc, JSValue *argv);
+JSValue js_object_seal(JSContext *ctx, JSValue *this_val,
+                       int argc, JSValue *argv);
+JSValue js_object_preventExtensions(JSContext *ctx, JSValue *this_val,
+                                    int argc, JSValue *argv);
+JSValue js_object_isFrozen(JSContext *ctx, JSValue *this_val,
+                           int argc, JSValue *argv);
+JSValue js_object_isSealed(JSContext *ctx, JSValue *this_val,
+                           int argc, JSValue *argv);
+JSValue js_object_isExtensible(JSContext *ctx, JSValue *this_val,
+                               int argc, JSValue *argv);
 
 JSValue js_string_constructor(JSContext *ctx, JSValue *this_val,
                               int argc, JSValue *argv);
