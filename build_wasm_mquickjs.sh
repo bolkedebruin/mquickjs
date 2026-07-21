@@ -1,6 +1,10 @@
 #!/bin/bash
-# Build mquickjs compiler as WebAssembly module with FreeButton stdlib
-# This ensures the compiler knows about led, button, sensor, mqtt APIs
+# Build the mquickjs compiler as a WebAssembly module (engine-only).
+#
+# This builds a generic mquickjs -> bytecode compiler against the example
+# standard library (example_stdlib.c). It contains NO FreeButton-specific
+# bindings: those live in the FreeButton firmware repo (src/scripting/js/),
+# which builds its own WASM compiler with the FreeButton stdlib.
 
 set -e
 
@@ -8,7 +12,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
 
 echo "========================================"
-echo "Building mquickjs compiler for WebAssembly"
+echo "Building mquickjs compiler for WebAssembly (engine-only)"
 echo "========================================"
 
 # Ensure Emscripten is installed
@@ -29,48 +33,35 @@ echo "Emscripten version:"
 emcc --version | head -1
 echo ""
 
-# Step 1: Generate FreeButton stdlib headers (32-bit for ESP32)
-echo "Step 1: Generating FreeButton stdlib headers..."
+# Step 1: Generate the stdlib + atom headers (32-bit) from the example stdlib
+echo "Step 1: Generating stdlib headers..."
 
-# Check if freebutton_stdlib executable exists
-if [ ! -f freebutton_stdlib ]; then
-    echo "Building freebutton_stdlib generator..."
-
-    # Compile stdlib builder as host executable
-    gcc -O2 -Wall -D_GNU_SOURCE \
-        -c mquickjs_build.c -o mquickjs_build.host.o
-
-    gcc -O2 -Wall -D_GNU_SOURCE \
-        -c freebutton_stdlib.c -o freebutton_stdlib.host.o
-
-    gcc freebutton_stdlib.host.o mquickjs_build.host.o \
-        -o freebutton_stdlib
+if [ ! -f example_stdlib ]; then
+    echo "Building example_stdlib generator..."
+    gcc -O2 -Wall -D_GNU_SOURCE -c mquickjs_build.c -o mquickjs_build.host.o
+    gcc -O2 -Wall -D_GNU_SOURCE -c example_stdlib.c -o example_stdlib.host.o
+    gcc example_stdlib.host.o mquickjs_build.host.o -o example_stdlib
 fi
 
-# Generate 32-bit headers (for ESP32)
 echo "Generating 32-bit stdlib headers..."
-./freebutton_stdlib -m32 > freebutton_stdlib.h
-./freebutton_stdlib -a -m32 > mquickjs_atom.h
+./example_stdlib -m32 > example_stdlib.h
+./example_stdlib -a -m32 > mquickjs_atom.h
 
-echo "✓ Generated freebutton_stdlib.h and mquickjs_atom.h"
+echo "✓ Generated example_stdlib.h and mquickjs_atom.h"
 echo ""
 
 # Step 2: Compile to WebAssembly
 echo "Step 2: Compiling to WebAssembly..."
 
-# Source files needed for WASM compilation
-# Note: freebutton_stubs_wasm.c provides stub implementations for all FreeButton APIs
-# The actual implementations (freebutton_led.c, freebutton_sensor.c, freebutton_displayitem.c etc.)
-# are NOT included as they require hardware APIs not available in WASM
+# example.c defines the js_stdlib referenced by emscripten_wrapper.c
+# (via example_stdlib.h) along with the example class implementations.
 SOURCES="
     mquickjs.c
     cutils.c
     dtoa.c
     libm.c
     emscripten_wrapper.c
-    freebutton_stubs_wasm.c
-    freebutton_stdlib.c
-    stdlib_export.c
+    example.c
 "
 
 # Export functions that will be called from JavaScript
@@ -100,12 +91,7 @@ emcc \
     -s ERROR_ON_UNDEFINED_SYMBOLS=0 \
     -O3 \
     -DEMSCRIPTEN \
-    -D_GNU_SOURCE \
-    -DCONFIG_FREEBUTTON_LED \
-    -DCONFIG_FREEBUTTON_BUTTON \
-    -DCONFIG_FREEBUTTON_SENSOR \
-    -DCONFIG_FREEBUTTON_MQTT \
-    -DCONFIG_FREEBUTTON_DISPLAY
+    -D_GNU_SOURCE
 
 echo ""
 echo "✓ Build complete!"
@@ -114,4 +100,3 @@ echo "Output files:"
 ls -lh mquickjs.js mquickjs.wasm
 echo ""
 echo "Files ready for browser testing!"
-echo "Open the test HTML file in a browser to try it out."

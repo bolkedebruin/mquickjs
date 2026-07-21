@@ -5,7 +5,7 @@
   "keywords": "javascript, js, interpreter, embedded, esp32",
   "repository": {
     "type": "git",
-    "url": "https://github.com/conoro/mquickjs.git"
+    "url": "https://github.com/bolkedebruin/mquickjs.git"
   },
   "authors": [
     {

@@ -399,20 +399,14 @@ static const JSPropDef js_global_object[] = {
 #ifdef CONFIG_LED
     JS_PROP_CLASS_DEF("led", &js_led_obj),
 #endif
-#ifdef CONFIG_FREEBUTTON_LED
-    JS_PROP_CLASS_DEF("led", &js_freebutton_led_obj),
-#endif
-#ifdef CONFIG_FREEBUTTON_BUTTON
-    JS_PROP_CLASS_DEF("button", &js_freebutton_button_obj),
-#endif
 #ifdef CONFIG_FREEBUTTON_SENSOR
     JS_PROP_CLASS_DEF("sensor", &js_freebutton_sensor_obj),
 #endif
 #ifdef CONFIG_FREEBUTTON_MQTT
     JS_PROP_CLASS_DEF("mqtt", &js_freebutton_mqtt_obj),
 #endif
-#ifdef CONFIG_FREEBUTTON_DISPLAY
-    JS_PROP_CLASS_DEF("display", &js_freebutton_display_obj),
+#ifdef CONFIG_FREEBUTTON_SYSTEM
+    JS_PROP_CLASS_DEF("system", &js_freebutton_system_obj),
 #endif
     JS_CFUNC_DEF("print", 1, js_print),
 #ifdef CONFIG_CLASS_EXAMPLE
@@ -436,6 +430,11 @@ static const JSPropDef js_c_function_decl[] = {
     JS_CFUNC_SPECIAL_DEF("bound", 0, generic_params, js_function_bound ),
 #ifdef CONFIG_CLASS_EXAMPLE
     JS_CFUNC_SPECIAL_DEF("rectangle_closure_test", 0, generic_params, js_rectangle_closure_test ),
+#endif
+#ifdef CONFIG_FB_PROXY
+    /* Proxy dispatcher for fb object tree methods (closures via JS_NewCFunctionParams).
+       Index must match FB_PROXY_FUNC_IDX in device_hardware.h */
+    JS_CFUNC_SPECIAL_DEF("fb_proxy", 0, generic_params, js_fb_device_proxy ),
 #endif
     JS_PROP_END,
 };
