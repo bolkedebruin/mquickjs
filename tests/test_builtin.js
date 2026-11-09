@@ -126,11 +126,11 @@ function test()
     a.z = 5;
     assert(a.z_val, 5, "set");
 
-    Object.defineProperty(a, "w", {});
+    Object.defineProperty(a, "w", {configurable: true, enumerable: true, writable: true});
     assert("w" in a, true);
     a.w = 1;
     
-    Object.defineProperty(a, "w", {});
+    Object.defineProperty(a, "w", {configurable: true, enumerable: true, writable: true});
     assert(a.w, 1);
     
     a = { get z() { return 4; }, set z(val) { this.z_val = val; } };
@@ -313,6 +313,11 @@ function test_array()
     a = [ "b0", "z0", undefined, "b1", "a0", undefined, "z1", "a1", "a2"];
     a.sort(function(a, b) { return (a[0] > b[0]) - (a[0] < b[0]) } );
     assert(a.toString(), "a0,a1,a2,b0,b1,z0,z1,,");
+
+    a = ["a", "b"];
+    assert(0 in a, true);
+    assert(1 in a, true);
+    assert(2 in a, false);
 }
 
 /* non standard array behaviors */
@@ -466,6 +471,8 @@ function test_number()
     assert(+"  123   ", 123);
     assert(+"0b111", 7);
     assert(+"0o123", 83);
+
+    assert(Number("\u30007"), 7);
     
     assert(parseInt("123"), 123);
     assert(parseInt("  123r"), 123);
@@ -476,7 +483,8 @@ function test_number()
     assert(parseFloat("-Infinity"), -Infinity);
     assert(parseFloat("123.2"), 123.2);
     assert(parseFloat("123.2e3"), 123200);
-
+    assert(parseFloat("\xA0 7 \u3000"), 7);
+    
     assert((25).toExponential(), "2.5e+1");
     assert((25).toExponential(0), "3e+1");
     assert((-25).toExponential(0), "-3e+1");
@@ -568,6 +576,10 @@ function test_typed_array()
     a = new Uint8Array([1, 2, 3, 4]);
     a = a.subarray(1, 3);
     assert(a.toString(), "2,3");
+
+    a = new Uint8Array([1, 2, 3, 4]);
+    assert(3 in a, true);
+    assert(4 in a, false);
 }
 
 function repeat(a, n)

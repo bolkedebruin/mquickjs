@@ -412,6 +412,7 @@ static const JSPropDef js_global_object[] = {
 #ifdef CONFIG_CLASS_EXAMPLE
     JS_PROP_CLASS_DEF("Rectangle", &js_rectangle_class),
     JS_PROP_CLASS_DEF("FilledRectangle", &js_filled_rectangle_class),
+    JS_PROP_CLASS_DEF("TestObject", &js_test_object_class),
 #else
     JS_CFUNC_DEF("gc", 0, js_gc),
     JS_CFUNC_DEF("load", 1, js_load),
@@ -429,7 +430,7 @@ static const JSPropDef js_c_function_decl[] = {
     /* must come first if "bind" is defined */
     JS_CFUNC_SPECIAL_DEF("bound", 0, generic_params, js_function_bound ),
 #ifdef CONFIG_CLASS_EXAMPLE
-    JS_CFUNC_SPECIAL_DEF("rectangle_closure_test", 0, generic_params, js_rectangle_closure_test ),
+    JS_CFUNC_SPECIAL_DEF("test_object_closure_test", 0, generic_params, js_test_object_closure_test ),
 #endif
 #ifdef CONFIG_FB_PROXY
     /* Proxy dispatcher for fb object tree methods (closures via JS_NewCFunctionParams).

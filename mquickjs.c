@@ -329,6 +329,7 @@ __attribute__((packed)) /* unaligned 64 bit access in 32-bit mode */
 
 typedef struct {
     void *opaque;
+    JSValue values[];
 } JSObjectUserData;
 
 struct JSObject {
@@ -1133,24 +1134,46 @@ int JS_GetClassID(JSContext *ctx, JSValue val)
     }
 }
 
-void JS_SetOpaque(JSContext *ctx, JSValue val, void *opaque)
+void JS_SetOpaque(JSContext *ctx, JSValue obj, void *opaque)
 {
     JSObject *p;
-    assert(JS_IsPtr(val));
-    p = JS_VALUE_TO_PTR(val);
+    assert(JS_IsPtr(obj));
+    p = JS_VALUE_TO_PTR(obj);
     assert(p->mtag == JS_MTAG_OBJECT);
     assert(p->class_id >= JS_CLASS_USER);
     p->u.user.opaque = opaque;
 }
 
-void *JS_GetOpaque(JSContext *ctx, JSValue val)
+void *JS_GetOpaque(JSContext *ctx, JSValue obj)
 {
     JSObject *p;
-    assert(JS_IsPtr(val));
-    p = JS_VALUE_TO_PTR(val);
+    assert(JS_IsPtr(obj));
+    p = JS_VALUE_TO_PTR(obj);
     assert(p->mtag == JS_MTAG_OBJECT);
     assert(p->class_id >= JS_CLASS_USER);
     return p->u.user.opaque;
+}
+
+void JS_SetUserValue(JSContext *ctx, JSValue obj, uint32_t idx, JSValue val)
+{
+    JSObject *p;
+    assert(JS_IsPtr(obj));
+    p = JS_VALUE_TO_PTR(obj);
+    assert(p->mtag == JS_MTAG_OBJECT);
+    assert(p->class_id >= JS_CLASS_USER);
+    assert((idx + 1) < p->extra_size);
+    p->u.user.values[idx] = val;
+}
+
+JSValue JS_GetUserValue(JSContext *ctx, JSValue obj, uint32_t idx)
+{
+    JSObject *p;
+    assert(JS_IsPtr(obj));
+    p = JS_VALUE_TO_PTR(obj);
+    assert(p->mtag == JS_MTAG_OBJECT);
+    assert(p->class_id >= JS_CLASS_USER);
+    assert((idx + 1) < p->extra_size);
+    return p->u.user.values[idx];
 }
 
 static JSObject *js_get_object_class(JSContext *ctx, JSValue val, int class_id)
@@ -2392,15 +2415,19 @@ static JSValue JS_NewObjectClass(JSContext *ctx, int class_id, int extra_size)
     return JS_NewObjectProtoClass(ctx, ctx->class_proto[class_id], class_id, extra_size);
 }
 
-JSValue JS_NewObjectClassUser(JSContext *ctx, int class_id)
+JSValue JS_NewObjectClassUser(JSContext *ctx, int class_id, uint32_t n_values)
 {
     JSObject *p;
+    uint32_t i;
     assert(class_id >= JS_CLASS_USER);
+    assert(n_values <= 254); /* arbitrary but limited by the bit width of extra_size */
     p = JS_NewObjectProtoClass1(ctx, ctx->class_proto[class_id], class_id,
-                                sizeof(JSObjectUserData));
+                                sizeof(JSObjectUserData) + n_values * sizeof(JSValue));
     if (!p)
         return JS_EXCEPTION;
     p->u.user.opaque = NULL;
+    for(i = 0; i < n_values; i++)
+        p->u.user.values[i] = JS_UNDEFINED;
     return JS_VALUE_FROM_PTR(p);
 }
 
@@ -2560,11 +2587,15 @@ static JSValue JS_GetPropertyInternal(JSContext *ctx, JSValue obj, JSValue prop,
 
     for(;;) {
         if (p->class_id == JS_CLASS_ARRAY) {
+            /* in stricter mode, numeric properties are never
+               forwarded to the prototype */
             if (JS_IsInt(prop)) {
                 uint32_t idx = JS_VALUE_GET_INT(prop);
                 if (idx < p->u.array.len) {
                     JSValueArray *arr = JS_VALUE_TO_PTR(p->u.array.tab);
                     return arr->arr[idx];
+                } else {
+                    return JS_UNDEFINED;
                 }
             } else if (JS_IsNumericProperty(ctx, prop)) {
                 return JS_UNDEFINED;
@@ -2599,6 +2630,8 @@ static JSValue JS_GetPropertyInternal(JSContext *ctx, JSValue obj, JSValue prop,
                     case JS_CLASS_FLOAT64_ARRAY:
                         return JS_NewFloat64(ctx, *((double *)arr->buf + idx));
                     }
+                } else {
+                    return JS_UNDEFINED;
                 }
             } else if (JS_IsNumericProperty(ctx, prop)) {
                 return JS_UNDEFINED;
@@ -2691,6 +2724,24 @@ static BOOL JS_HasProperty(JSContext *ctx, JSValue obj, JSValue prop)
     if (p->mtag != JS_MTAG_OBJECT)
         return FALSE;
     for(;;) {
+        if (p->class_id == JS_CLASS_ARRAY) {
+            /* in stricter mode, numeric properties are never
+               forwarded to the prototype */
+            if (JS_IsInt(prop)) {
+                uint32_t idx = JS_VALUE_GET_INT(prop);
+                return (idx < p->u.array.len);
+            } else if (JS_IsNumericProperty(ctx, prop)) {
+                return FALSE;
+            }
+        } else if (p->class_id >= JS_CLASS_UINT8C_ARRAY &&
+                   p->class_id <= JS_CLASS_FLOAT64_ARRAY) {
+            if (JS_IsInt(prop)) {
+                uint32_t idx = JS_VALUE_GET_INT(prop);
+                return (idx < p->u.typed_array.len);
+            } else if (JS_IsNumericProperty(ctx, prop)) {
+                return FALSE;
+            }
+        }
         pr = find_own_property(ctx, p, prop);
         if (pr)
             return TRUE;
@@ -4015,7 +4066,7 @@ static void build_backtrace(JSContext *ctx, JSValue error_obj,
                             const char *filename, int line_num, int col_num, int skip_level)
 {
     JSObject *p1;
-    char buf[128], *p, *buf_end, *line_start;
+    char buf[256], *p, *buf_end, *line_start;
     const char *str;
     JSValue *fp, stack_str;
     JSCStringBuf str_buf;
@@ -4234,15 +4285,50 @@ static JSValue JS_ToPropertyKey(JSContext *ctx, JSValue val)
         return JS_MakeUniqueString(ctx, val);
 }
 
-static int skip_spaces(const char *p1)
+/* c < 128 */
+static force_inline BOOL unicode_is_space_ascii(uint32_t c)
+{
+    return (c >= 0x0009 && c <= 0x000D) || (c == 0x0020);
+}
+
+static BOOL unicode_is_space_non_ascii(uint32_t c)
+{
+    return (c == 0x00A0 ||
+            c == 0x1680 ||
+            (c >= 0x2000 && c <= 0x200A) ||
+            (c >= 0x2028 && c <= 0x2029) ||
+            c == 0x202F ||
+            c == 0x205F ||
+            c == 0x3000 ||
+            c == 0xFEFF);
+}
+
+static force_inline BOOL unicode_is_space(uint32_t c)
+{
+    if (likely(c < 128)) {
+        return unicode_is_space_ascii(c);
+    } else {
+        return unicode_is_space_non_ascii(c);
+    }
+}
+
+static size_t skip_spaces(const char *p1)
 {
     const char *p = p1;
     int c;
     for(;;) {
-        c = *p;
-        if (!((c >= 0x09 && c <= 0x0d) || (c == 0x20)))
-            break;
-        p++;
+        c = (uint8_t)*p;
+        if (c < 0x80) {
+            if (!unicode_is_space_ascii(c))
+                break;
+            p++;
+        } else {
+            size_t clen;
+            c = __utf8_get((const uint8_t *)p, &clen);
+            if (!unicode_is_space_non_ascii(c))
+                break;
+            p += clen;
+        }
     }
     return p - p1;
 }
@@ -5483,8 +5569,8 @@ JSValue JS_Call(JSContext *ctx, int call_flags)
                                     val = JS_EXCEPTION;
                                 } else {
                                     d = fd->func.f_f(d);
+                                    val = JS_NewFloat64(ctx, d);
                                 }
-                                val = JS_NewFloat64(ctx, d);
                             }
                             break;
                         default:
@@ -12829,6 +12915,13 @@ static void gc_mark_flush(GCMarkState *s)
                     gc_mark(s, p->u.regexp.source);
                     gc_mark(s, p->u.regexp.byte_code);
                     break;
+                default:
+                    if (p->class_id >= JS_CLASS_USER) {
+                        int i;
+                        for(i = 0; i < p->extra_size - 1; i++) 
+                            gc_mark(s, p->u.user.values[i]);
+                    }
+                    break;
                 }
             }
             break;
@@ -13022,16 +13115,19 @@ static void gc_mark_all(JSContext *ctx, BOOL keep_atoms)
             if (b->gc_mark) {
                 b->gc_mark = 0;
             } else {
-                JSObject *p = (void *)ptr;
-                /* call the user finalizer if needed */
-                if (p->mtag == JS_MTAG_OBJECT && p->class_id >= JS_CLASS_USER &&
-                    ctx->c_finalizer_table[p->class_id - JS_CLASS_USER] != NULL) {
-                    ctx->c_finalizer_table[p->class_id - JS_CLASS_USER](ctx, p->u.user.opaque);
-                }
                 /* merge all the consecutive free blocks */
-                ptr1 = ptr + size;
-                while (ptr1 < ctx->heap_free && ((JSFreeBlock *)ptr1)->gc_mark == 0) {
-                    ptr1 += get_mblock_size(ptr1);
+                ptr1 = ptr;
+                for(;;) {
+                    JSObject *p = (void *)ptr1;
+                    /* call the user finalizer if needed */
+                    if (p->mtag == JS_MTAG_OBJECT && p->class_id >= JS_CLASS_USER &&
+                        ctx->c_finalizer_table[p->class_id - JS_CLASS_USER] != NULL) {
+                        ctx->c_finalizer_table[p->class_id - JS_CLASS_USER](ctx, p->u.user.opaque);
+                    }
+                    ptr1 += size;
+                    if (ptr1 >= ctx->heap_free || ((JSFreeBlock *)ptr1)->gc_mark != 0)
+                        break;
+                    size = get_mblock_size(ptr1);
                 }
                 size = ptr1 - ptr;
                 set_free_block(b, size);
@@ -13136,6 +13232,13 @@ static void gc_thread_block(JSContext *ctx, void *ptr)
             case JS_CLASS_REGEXP:
                 gc_thread_pointer(ctx, &p->u.regexp.source);
                 gc_thread_pointer(ctx, &p->u.regexp.byte_code);
+                break;
+            default:
+                if (p->class_id >= JS_CLASS_USER) {
+                    int i;
+                    for(i = 0; i < p->extra_size - 1; i++)
+                        gc_thread_pointer(ctx, &p->u.user.values[i]);
+                }
                 break;
             }
         }
@@ -14589,33 +14692,6 @@ JSValue js_string_toLowerCase(JSContext *ctx, JSValue *this_val,
         string_buffer_putc(ctx, b, c);
     }
     return string_buffer_pop(ctx, b);
-}
-
-/* c < 128 */
-static force_inline BOOL unicode_is_space_ascii(uint32_t c)
-{
-    return (c >= 0x0009 && c <= 0x000D) || (c == 0x0020);
-}
-
-static BOOL unicode_is_space_non_ascii(uint32_t c)
-{
-    return (c == 0x00A0 ||
-            c == 0x1680 ||
-            (c >= 0x2000 && c <= 0x200A) ||
-            (c >= 0x2028 && c <= 0x2029) ||
-            c == 0x202F ||
-            c == 0x205F ||
-            c == 0x3000 ||
-            c == 0xFEFF);
-}
-
-static force_inline BOOL unicode_is_space(uint32_t c)
-{
-    if (likely(c < 128)) {
-        return unicode_is_space_ascii(c);
-    } else {
-        return unicode_is_space_non_ascii(c);
-    }
 }
 
 JSValue js_string_trim(JSContext *ctx, JSValue *this_val,

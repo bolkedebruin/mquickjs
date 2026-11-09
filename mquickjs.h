@@ -213,6 +213,8 @@ JS_BOOL JS_IsArray(JSContext *ctx, JSValue obj);
 int JS_GetClassID(JSContext *ctx, JSValue val);
 void JS_SetOpaque(JSContext *ctx, JSValue val, void *opaque);
 void *JS_GetOpaque(JSContext *ctx, JSValue val);
+void JS_SetUserValue(JSContext *ctx, JSValue obj, uint32_t idx, JSValue val);
+JSValue JS_GetUserValue(JSContext *ctx, JSValue obj, uint32_t idx);
 
 typedef JSValue JSCFunction(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 /* no JS function call be called from a C finalizer */
@@ -285,7 +287,7 @@ JSValue JS_SetPropertyStr(JSContext *ctx, JSValue this_obj,
                           const char *str, JSValue val);
 JSValue JS_SetPropertyUint32(JSContext *ctx, JSValue this_obj,
                              uint32_t idx, JSValue val);
-JSValue JS_NewObjectClassUser(JSContext *ctx, int class_id);
+JSValue JS_NewObjectClassUser(JSContext *ctx, int class_id, uint32_t n_values);
 JSValue JS_NewObject(JSContext *ctx);
 JSValue JS_NewArray(JSContext *ctx, int initial_len);
 /* create a C function with an object parameter (closure) */
