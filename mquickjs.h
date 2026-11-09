@@ -304,6 +304,9 @@ JSValue JS_Run(JSContext *ctx, JSValue val);
 JSValue JS_Eval(JSContext *ctx, const char *input, size_t input_len,
                 const char *filename, int eval_flags);
 void JS_GC(JSContext *ctx);
+/* heap_used: heap start to first free byte (garbage included until the next
+   GC); free_size: bytes between the heap and the stack. Either may be NULL. */
+void JS_GetMemoryUsage(JSContext *ctx, size_t *heap_used, size_t *free_size);
 JSValue JS_NewStringLen(JSContext *ctx, const char *buf, size_t buf_len);
 JSValue JS_NewString(JSContext *ctx, const char *buf);
 const char *JS_ToCStringLen(JSContext *ctx, size_t *plen, JSValue val, JSCStringBuf *buf);

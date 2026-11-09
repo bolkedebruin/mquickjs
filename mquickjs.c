@@ -13308,6 +13308,17 @@ void JS_GC(JSContext *ctx)
     JS_GC2(ctx, TRUE);
 }
 
+/* Memory of the context: heap_used = bytes from the heap start to the first
+   free byte (live data plus garbage until the next GC; call JS_GC() first
+   for the live size), free_size = bytes between the heap and the stack. */
+void JS_GetMemoryUsage(JSContext *ctx, size_t *heap_used, size_t *free_size)
+{
+    if (heap_used)
+        *heap_used = ctx->heap_free - ctx->heap_base;
+    if (free_size)
+        *free_size = (uint8_t *)ctx->sp - ctx->heap_free;
+}
+
 /* bytecode saving and loading */
 
 #define JS_BYTECODE_VERSION_32 0x0001
