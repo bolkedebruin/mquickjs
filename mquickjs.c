@@ -14024,6 +14024,134 @@ int JS_RelocateBytecode2Indirect(JSContext *ctx, JSBytecodeHeader *hdr,
     return 0;
 }
 
+/* Rebasing: move the pointers of bytecode that is already relocated, e.g.
+   when it is copied to another address, or when the firmware it was
+   relocated for is replaced by a build whose stdlib ROM table is the same
+   but lies elsewhere (the ROM atoms the relocation pointed at moved by the
+   table's displacement). Unlike relocation this needs no context and no
+   atom lookups: every pointer is classified by the range it points into.
+   A pointer in none of the ranges makes it fail, so nothing is guessed. */
+
+static int rebase_value(JSValue *pval, const JSRebaseRange *ranges, int n_ranges)
+{
+    JSValue v = *pval;
+    uintptr_t p;
+    int i;
+
+    if (!JS_IsPtr(v))
+        return 0;
+    p = (uintptr_t)JS_VALUE_TO_PTR(v);
+    for(i = 0; i < n_ranges; i++) {
+        if (p >= ranges[i].start && p < ranges[i].end) {
+            *pval = v + ranges[i].delta;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+/* the JSValue at byte offset 'off' of the image: rebase it in the window
+   copy when it lies there */
+static int rebase_slot(uint8_t *window, uint32_t win_off, uint32_t win_len,
+                       uint32_t off, const JSRebaseRange *ranges, int n_ranges)
+{
+    JSValue v;
+
+    if (off < win_off || off - win_off + sizeof(JSValue) > win_len)
+        return 0;
+    memcpy(&v, window + (off - win_off), sizeof(v));
+    if (rebase_value(&v, ranges, n_ranges))
+        return -1;
+    memcpy(window + (off - win_off), &v, sizeof(v));
+    return 0;
+}
+
+int JS_RebaseBytecodeWindow(const uint8_t *image, uint32_t image_len,
+                            uint8_t *window, uint32_t win_off, uint32_t win_len,
+                            const JSRebaseRange *ranges, int n_ranges,
+                            uintptr_t new_base_addr)
+{
+    const uint32_t hdr_len = sizeof(JSBytecodeHeader);
+    const JSBytecodeHeader *hdr = (const JSBytecodeHeader *)image;
+    const uint32_t win_end = win_off + win_len;
+    uint32_t off;
+
+    if (image_len < hdr_len || win_off > image_len || win_len > image_len - win_off)
+        return -1;
+    /* slots are JSValue aligned: a window must not split one */
+    if ((win_off % sizeof(JSValue)) != 0 ||
+        ((win_len % sizeof(JSValue)) != 0 && win_end != image_len))
+        return -1;
+    if (hdr->magic != JS_BYTECODE_MAGIC || hdr->version != JS_BYTECODE_VERSION)
+        return -1;
+
+    /* header */
+    if (rebase_slot(window, win_off, win_len, offsetof(JSBytecodeHeader, unique_strings),
+                    ranges, n_ranges) ||
+        rebase_slot(window, win_off, win_len, offsetof(JSBytecodeHeader, main_func),
+                    ranges, n_ranges))
+        return -1;
+    off = offsetof(JSBytecodeHeader, base_addr);
+    if (off >= win_off && off - win_off + sizeof(uintptr_t) <= win_len) {
+        uintptr_t b = new_base_addr;
+        memcpy(window + (off - win_off), &b, sizeof(b));
+    }
+
+    /* memory blocks, in order; only those overlapping the window */
+    off = hdr_len;
+    while (off < image_len && off < win_end) {
+        const uint8_t *blk = image + off;
+        int size, i;
+
+        if (image_len - off < sizeof(JSWord))
+            return -1;
+        size = get_mblock_size(blk);
+        if (size <= 0 || (uint32_t)size > image_len - off)
+            return -1;
+        if (off + size > win_off) {
+            switch(((const JSMemBlockHeader *)blk)->mtag) {
+            case JS_MTAG_FUNCTION_BYTECODE:
+                {
+                    static const uint16_t fields[] = {
+                        offsetof(JSFunctionBytecode, func_name),
+                        offsetof(JSFunctionBytecode, byte_code),
+                        offsetof(JSFunctionBytecode, cpool),
+                        offsetof(JSFunctionBytecode, vars),
+                        offsetof(JSFunctionBytecode, ext_vars),
+                        offsetof(JSFunctionBytecode, filename),
+                        offsetof(JSFunctionBytecode, pc2line),
+                    };
+                    for(i = 0; i < countof(fields); i++) {
+                        if (rebase_slot(window, win_off, win_len, off + fields[i],
+                                        ranges, n_ranges))
+                            return -1;
+                    }
+                }
+                break;
+            case JS_MTAG_VALUE_ARRAY:
+                {
+                    const JSValueArray *p = (const JSValueArray *)blk;
+                    for(i = 0; i < p->size; i++) {
+                        if (rebase_slot(window, win_off, win_len,
+                                        off + offsetof(JSValueArray, arr) + i * sizeof(JSValue),
+                                        ranges, n_ranges))
+                            return -1;
+                    }
+                }
+                break;
+            case JS_MTAG_STRING:
+            case JS_MTAG_FLOAT64:
+            case JS_MTAG_BYTE_ARRAY:
+                break;
+            default:
+                return -1;
+            }
+        }
+        off += size;
+    }
+    return 0;
+}
+
 /* Relocate the bytecode in 'buf' so that it can be executed
    later. Return 0 if OK, != 0 if error */
 int JS_RelocateBytecode(JSContext *ctx,

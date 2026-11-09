@@ -357,6 +357,25 @@ int JS_RelocateBytecode2Indirect(JSContext *ctx, JSBytecodeHeader *hdr,
                                   uint8_t *buf, uint32_t buf_len,
                                   uintptr_t new_base_addr, JS_BOOL update_atoms,
                                   JSRelocReadFunc read_func, void *read_opaque);
+/* Rebase bytecode that is already relocated (no context needed): every
+   pointer that points into ranges[i] (start <= p < end) gets ranges[i].delta
+   added (modulo 2^n, so it may move down); the header's base_addr becomes
+   new_base_addr. Works on a window of the image so that it can stream
+   (e.g. from mapped flash to flash): 'image' is the whole relocated image
+   (read-only, header included), 'window' a writable copy of its bytes
+   [win_off, win_off + win_len); win_off and win_len must be multiples of
+   sizeof(JSValue) (except a last window ending at image_len). Returns 0, or
+   -1 when the image is malformed or a pointer is in none of the ranges. */
+typedef struct {
+    uintptr_t start;
+    uintptr_t end;
+    uintptr_t delta;
+} JSRebaseRange;
+int JS_RebaseBytecodeWindow(const uint8_t *image, uint32_t image_len,
+                            uint8_t *window, uint32_t win_off, uint32_t win_len,
+                            const JSRebaseRange *ranges, int n_ranges,
+                            uintptr_t new_base_addr);
+
 #if JSW == 8
 typedef struct {
     uint16_t magic; /* JS_BYTECODE_MAGIC */

@@ -18,6 +18,7 @@ freebutton_stdlib
 dtoa_test
 libm_test
 rempio2_test
+test_rebase
 mquickjs_build_atoms
 
 # Generated headers and bytecode

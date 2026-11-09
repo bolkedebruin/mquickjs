@@ -76,7 +76,7 @@ MQJS_BUILD_FLAGS=-m32
 endif
 
 PROGS=mqjs$(EXE) example$(EXE)
-TEST_PROGS=dtoa_test libm_test test_relocation
+TEST_PROGS=dtoa_test libm_test test_relocation test_rebase
 
 all: $(PROGS)
 
@@ -103,6 +103,12 @@ mqjs_stdlib.h: mqjs_stdlib
 
 mqjs.o: mqjs_stdlib.h
 
+# JS_RebaseBytecodeWindow() test (mqjs.c with its main() renamed)
+tests/test_rebase.o: mqjs_stdlib.h mqjs.c
+
+test_rebase$(EXE): tests/test_rebase.o mqjs_led.o readline_tty.o readline.o mquickjs.o dtoa.o libm.o cutils.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
+
 # C API example
 example.o: example_stdlib.h
 
@@ -121,7 +127,7 @@ example_stdlib.h: example_stdlib
 %.host.o: %.c
 	$(HOST_CC) $(HOST_CFLAGS) -c -o $@ $<
 
-test: mqjs example
+test: mqjs example test_rebase$(EXE)
 	./mqjs tests/test_closure.js
 	./mqjs tests/test_language.js
 	./mqjs tests/test_loop.js
@@ -131,6 +137,7 @@ test: mqjs example
 	./mqjs -o test_builtin.bin tests/test_builtin.js
 #	@sha256sum -c test_builtin.sha256
 	./mqjs -b test_builtin.bin
+	./test_rebase test_builtin.bin
 # test @rom bytecode roundtrip
 	./mqjs -o test_rom_pragma.bin tests/test_rom_pragma.js
 	./mqjs -b test_rom_pragma.bin
