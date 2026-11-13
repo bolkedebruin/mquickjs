@@ -30,6 +30,7 @@
 #include <assert.h>
 #include <math.h>
 #include <setjmp.h>
+#include <time.h>
 
 #include "cutils.h"
 #include "dtoa.h"
@@ -16753,6 +16754,44 @@ JSValue js_date_valueOf(JSContext *ctx, JSValue *this_val,
         return JS_EXCEPTION;
     }
     return __JS_NewFloat64(ctx, p->u.date.dval);
+}
+
+/* The local-time getters of a Date (ECMAScript getFullYear, getMonth,
+   getDate, getDay, getHours, getMinutes, getSeconds, getMilliseconds), one
+   per magic, in the time zone of the C library (TZ). NaN for an invalid
+   date. */
+JSValue js_date_get_field(JSContext *ctx, JSValue *this_val,
+                          int argc, JSValue *argv, int magic)
+{
+    JSObject *p;
+    double d, secs;
+    time_t t;
+    struct tm tm;
+    int v;
+
+    p = js_get_object_class(ctx, *this_val, JS_CLASS_DATE);
+    if (!p) {
+        JS_ThrowTypeError(ctx, "not a Date object");
+        return JS_EXCEPTION;
+    }
+    d = p->u.date.dval;
+    if (isnan(d) || isinf(d))
+        return __JS_NewFloat64(ctx, NAN);
+    secs = floor(d / 1000.0);
+    t = (time_t)secs;
+    if (!localtime_r(&t, &tm))
+        return __JS_NewFloat64(ctx, NAN);
+    switch (magic) {
+    case 0: v = tm.tm_year + 1900; break;
+    case 1: v = tm.tm_mon; break;      /* 0 = January */
+    case 2: v = tm.tm_mday; break;
+    case 3: v = tm.tm_wday; break;     /* 0 = Sunday */
+    case 4: v = tm.tm_hour; break;
+    case 5: v = tm.tm_min; break;
+    case 6: v = tm.tm_sec; break;
+    default: v = (int)(d - secs * 1000.0); break;
+    }
+    return JS_NewInt32(ctx, v);
 }
 
 /* global */

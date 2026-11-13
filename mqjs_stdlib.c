@@ -316,6 +316,16 @@ static const JSPropDef js_date[] = {
 
 static const JSPropDef js_date_proto[] = {
     JS_CFUNC_DEF("valueOf", 0, js_date_valueOf),
+    JS_CFUNC_DEF("getTime", 0, js_date_valueOf),
+    /* local time (the C library's time zone) */
+    JS_CFUNC_MAGIC_DEF("getFullYear", 0, js_date_get_field, 0 ),
+    JS_CFUNC_MAGIC_DEF("getMonth", 0, js_date_get_field, 1 ),
+    JS_CFUNC_MAGIC_DEF("getDate", 0, js_date_get_field, 2 ),
+    JS_CFUNC_MAGIC_DEF("getDay", 0, js_date_get_field, 3 ),
+    JS_CFUNC_MAGIC_DEF("getHours", 0, js_date_get_field, 4 ),
+    JS_CFUNC_MAGIC_DEF("getMinutes", 0, js_date_get_field, 5 ),
+    JS_CFUNC_MAGIC_DEF("getSeconds", 0, js_date_get_field, 6 ),
+    JS_CFUNC_MAGIC_DEF("getMilliseconds", 0, js_date_get_field, 7 ),
     JS_PROP_END,
 };
 

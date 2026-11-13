@@ -251,6 +251,8 @@ JSValue js_typed_array_set(JSContext *ctx, JSValue *this_val,
 
 JSValue js_date_valueOf(JSContext *ctx, JSValue *this_val,
                         int argc, JSValue *argv);
+JSValue js_date_get_field(JSContext *ctx, JSValue *this_val,
+                          int argc, JSValue *argv, int magic);
 
 JSValue js_global_eval(JSContext *ctx, JSValue *this_val,
                        int argc, JSValue *argv);
